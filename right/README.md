@@ -1,7 +1,8 @@
 # Right camera images
 
-Place right-camera frames here (e.g. `scene01_right.jpg`).
+Place right-camera frames here (e.g. `scene01_left.jpg`).
 
-For `collect_points.py`, pair filenames with the left folder (`left` ↔ `right` in the name).
+`collect_points.py` pairs files by name (`left` ↔ `right`, e.g. `scene01_left.jpg` ↔ `scene01_right.jpg`),
+otherwise by sorted order.
 
-Recommended resolution: **2592×1944** (matches calibration in `run_math.py`).
+Recommended resolution: **2592×1944** (the resolution of the calibration).

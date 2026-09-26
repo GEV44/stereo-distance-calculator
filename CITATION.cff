@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Stereo Distance Calculator: a Γ-grid stereo camera model with analytic gradients"
+authors:
+  - given-names: Gevorg
+version: 2.0.0
+date-released: 2026-09-26
+license: MIT
+repository-code: "https://github.com/GEV44/stereo-distance-calculator"
+keywords:
+  - stereo vision
+  - camera calibration
+  - triangulation

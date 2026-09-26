@@ -1,0 +1,451 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{textcomp}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+\setlist{itemsep=2pt}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\vr}{\mathbf{r}}
+\newcommand{\vd}{\mathbf{d}}
+\newcommand{\vw}{\mathbf{w}}
+\newcommand{\G}{\Gamma}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\textbf{Stereo Distance Measurement with a Per-Camera $\Gamma$-Grid Model}\\[4pt]
+\large Mathematical Foundation (v2)}
+\author{Gevorg}
+\date{2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We measure metric distance from two calibrated cameras with a deliberately small,
+fully transparent model: each camera is described by a $5\times5\times2$ grid $\G$
+of \emph{effective inverse focal lengths} interpolated bilinearly over the image, and
+the rig by a baseline $\vd$ and a relative rotation $R(\bm\omega)$. All gradients are
+derived by hand and the model is fitted with Adam on a robust relative-disparity loss;
+no automatic differentiation, SciPy or neural networks are used. On 27 hand-labelled
+real points the leave-one-out error halves with respect to the first version of the
+system (10.1\,\% $\rightarrow$ 5.1\,\% MAPE); on a simulated rig with Brown--Conrady
+distortion, where ground truth is exact, the $\G$ grid reaches 0.5--1\,\% error,
+four to five times better than a pinhole model with the same extrinsics.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%=====================================================================
+\section{Pixel and normalised coordinates}
+A pixel is $(u,v)$ on a $W\times H$ sensor ($2592\times1944$). Optimising in pixels is
+badly scaled, so we map to normalised coordinates centred on $(C_X,C_Y)=(W/2,H/2)$:
+\begin{equation}
+\tilde u = \frac{u-C_X}{C_X},\qquad \tilde v=\frac{v-C_Y}{C_Y}\qquad\in[-1,1].
+\end{equation}
+
+\section{The ray equation}
+Every pixel defines a ray from the optical centre. In our model
+\begin{equation}\label{eq:ray}
+\vr(u,v)=\begin{bmatrix}\tilde u\,\gamma_x(u,v)\\ \tilde v\,\gamma_y(u,v)\\ 1\end{bmatrix}.
+\end{equation}
+For an ideal pinhole with focal length $f$ (pixels), $\vr=[(u-C_X)/f,\,(v-C_Y)/f,\,1]^\top$,
+i.e.\ $\gamma_x=C_X/f$ and $\gamma_y=C_Y/f$ everywhere. Letting $\gamma$ vary over the image
+absorbs lens distortion without a polynomial distortion model.
+
+\paragraph{Why two channels.} Version 1 used a single $\gamma$ for both axes. Since
+$C_X\neq C_Y$ ($C_X/C_Y=4/3$), a single value cannot equal both $C_X/f$ and $C_Y/f$: the
+vertical ray component was scaled by $4/3$. The two-channel grid $\G\in\R^{5\times5\times2}$
+removes this error; the nominal value is $\G_0=[C_X/f_0,\;C_Y/f_0]$ with $f_0=2880$\,px.
+
+\section{Bilinear interpolation}
+Grid nodes sit at $u=j\,c_w$, $v=i\,c_h$ with $c_w=W/4$, $c_h=H/4$. With
+$f_x=u/c_w$, $f_y=v/c_h$, cell $(i_y,i_x)=(\lfloor f_y\rfloor,\lfloor f_x\rfloor)$ (clamped to the
+grid) and $t_x=f_x-i_x$, $t_y=f_y-i_y$:
+\begin{equation}\label{eq:bilinear}
+\gamma(u,v)=\sum_{k=1}^{4}w_k\,\G_{n_k},\qquad
+(w_1,\dots,w_4)=\big((1-t_x)(1-t_y),\;t_x(1-t_y),\;(1-t_x)t_y,\;t_xt_y\big).
+\end{equation}
+The weights sum to one, reproduce any field linear in $(u,v)$ exactly, and make $\gamma$
+$C^0$-continuous; evaluation is $O(1)$ (four multiply--adds). Crucially,
+$\partial\gamma/\partial\G_{n_k}=w_k$, which makes all gradients cheap.
+
+%=====================================================================
+\section{Stereo geometry}
+\subsection{Rig model}
+Let $P_L,P_R$ be the coordinates of one 3-D point in the left and right camera frames.
+The rig is described by
+\begin{equation}\label{eq:rig}
+P_L = R(\bm\omega)\,P_R + \vd,\qquad \vd=[d_x,d_y,0]^\top,
+\end{equation}
+with $R=R_z(\omega_\text{roll})\,R_y(\omega_\text{yaw})\,R_x(\omega_\text{pitch})$. Version 1 assumed
+$R=I$. The real data contradict this: the horizontal disparity follows
+$\Delta u\approx 575/Z+61$\,px (a constant offset $\Rightarrow$ yaw), and the vertical disparity
+grows linearly with $u$ ($+44$\,px at the right border, $-32$\,px at the left $\Rightarrow$ roll).
+A multiplicative $\gamma$ can produce neither an additive offset at $\tilde u=0$ nor an
+$x\!\leftrightarrow\!y$ coupling, so three angles are added.
+
+For small angles $R\approx I+[\bm\omega]_\times$, and the exact partial derivatives are
+\begin{equation}
+\frac{\partial R}{\partial\omega_\text{pitch}}=R_zR_yR_x',\quad
+\frac{\partial R}{\partial\omega_\text{yaw}}=R_zR_y'R_x,\quad
+\frac{\partial R}{\partial\omega_\text{roll}}=R_z'R_yR_x,
+\end{equation}
+where $R'_\ast$ is the element-wise derivative of the elementary rotation.
+
+\subsection{Rectification in ray space}
+The right ray is rotated into the left frame and perspective-normalised:
+\begin{equation}\label{eq:rhat}
+\vw=R\,\vr_R,\qquad \hat\vr_R=\vw/w_z .
+\end{equation}
+Writing $P_L=Z\vr_L$ and $P_R\propto\vr_R$, eq.~\eqref{eq:rig} becomes
+\begin{equation}\label{eq:tri}
+Z\,\vr_L-Z'\,\hat\vr_R=\vd .
+\end{equation}
+The $z$-row gives $Z=Z'$ (because $d_z=0$), hence the \emph{disparity relations}
+\begin{equation}\label{eq:disp}
+r_{L,x}-\hat r_{R,x}=\frac{d_x}{Z},\qquad r_{L,y}-\hat r_{R,y}=\frac{d_y}{Z}.
+\end{equation}
+
+\subsection{Triangulation by ordinary least squares}
+Eq.~\eqref{eq:tri} is three equations in two unknowns, $A\mathbf x=\vd$ with
+$A=[\vr_L\;\;-\hat\vr_R]\in\R^{3\times2}$, $\mathbf x=[Z,Z']^\top$. Rays rarely intersect,
+so we solve the normal equations
+\begin{equation}
+A^\top A\,\mathbf x=A^\top\vd\;\Longrightarrow\;
+Z=\frac{s_{22}b_1-s_{12}b_2}{s_{11}s_{22}-s_{12}^2},
+\end{equation}
+with $s_{ij}=\mathbf a_i\!\cdot\!\mathbf a_j$ and $b_i=\mathbf a_i\!\cdot\!\vd$ (closed-form $2\times2$
+inverse, vectorised over all points).
+
+\subsection{The same problem by batch gradient descent}
+Minimising $f(\mathbf x)=\|A\mathbf x-\vd\|^2$ with $\nabla f=2(A^\top A\mathbf x-A^\top\vd)$ and step
+$\eta=1/L$, $L=2\lambda_{\max}(A^\top A)$, contracts the error by $(1-1/\kappa)$ per step,
+$\kappa=\lambda_{\max}/\lambda_{\min}$. For distant points the rays are nearly parallel:
+$\lambda_{\min}\approx\tfrac12(d_x/Z)^2$, and $\kappa$ reaches $10^3$--$10^4$. Nesterov momentum
+$\beta=(\sqrt\kappa-1)/(\sqrt\kappa+1)$ reduces the iteration count to $O(\sqrt\kappa)$
+(${\sim}600$--$2000$ iterations in practice). The iterative answer converges to the OLS
+answer to $10^{-8}$ relative precision (tested), which is why OLS is the authoritative path
+and GD is kept as a check (\code{StereoModel.triangulate\_gd}).
+
+\subsection{Why depth accuracy degrades with distance}
+From eq.~\eqref{eq:disp}, $Z=d_x/D$ with $D=r_{L,x}-\hat r_{R,x}$, so
+$\partial Z/\partial D=-Z^2/d_x$: a fixed pixel error causes a depth error that grows with $Z^2$.
+
+%=====================================================================
+\section{Loss function}
+\subsection{Relative disparity and relative epipolar error}
+Instead of $(Z_\text{pred}-Z)^2$, which inherits the $Z^2$ blow-up above, we use
+\begin{align}
+e_x &= D_x\,\frac{Z}{d_x}-1,\qquad D_x=r_{L,x}-\hat r_{R,x},\label{eq:ex}\\
+e_y &= D_y\,\frac{Z}{d_x}-\frac{d_y}{d_x},\qquad D_y=r_{L,y}-\hat r_{R,y}.\label{eq:ey}
+\end{align}
+$e_x$ is the relative disparity error ($\approx$ relative depth error): 5\,\% at 1\,m costs the
+same as 5\,\% at 5\,m. $e_y$ measures the vertical (epipolar) misalignment \emph{in the same
+units}, which in v1 was an absolute ray quantity an order of magnitude smaller than $e_x$
+(two orders after squaring) and therefore nearly ignored.
+
+\subsection{Huber robustness}
+Hand-clicked labels contain outliers, so each residual is wrapped in the Huber function
+\begin{equation}
+\rho_\delta(e)=\begin{cases}\tfrac12e^2,&|e|\le\delta\\ \delta(|e|-\tfrac12\delta),&|e|>\delta\end{cases},
+\qquad \psi(e)=\rho_\delta'(e)=\operatorname{clip}(e,-\delta,\delta),
+\end{equation}
+with $\delta=0.05$ (5\,\%). Beyond $\delta$ a point's gradient is capped, so a mis-click cannot
+dominate the fit.
+
+\subsection{Full objective}
+\begin{equation}\label{eq:loss}
+\mathcal L=\frac1N\sum_{i=1}^{N}\Big[\rho_\delta(e_{x,i})+\lambda_y\,\rho_\delta(e_{y,i})\Big]
++\frac{\lambda_a}{2}\sum_{c\in\{L,R\}}\|\G_c-\G_0\|^2
++\lambda_s\sum_{c\in\{L,R\}}E_\text{mem}(\G_c),
+\end{equation}
+with $\lambda_y=0.5$, $\lambda_a=3\cdot10^{-3}$ and $\lambda_s=0.3$ (selected by
+leave-one-out cross-validation, \S\ref{sec:eval}).
+
+%=====================================================================
+\section{Analytic gradients}
+Let $g_x=\psi(e_x)/N$, $g_y=\lambda_y\psi(e_y)/N$ and $s=Z/d_x$.
+
+\paragraph{Baseline.} From \eqref{eq:ex}--\eqref{eq:ey}:
+$\partial e_x/\partial d_x=-(e_x+1)/d_x$, $\partial e_y/\partial d_x=-e_y/d_x$,
+$\partial e_y/\partial d_y=-1/d_x$, so
+\begin{equation}
+\frac{\partial\mathcal L}{\partial d_x}=-\sum_i\frac{g_x(e_x+1)+g_ye_y}{d_x},\qquad
+\frac{\partial\mathcal L}{\partial d_y}=-\sum_i\frac{g_y}{d_x}.
+\end{equation}
+
+\paragraph{Left grid.} $r_{L,x}=\tilde u\gamma_x$, $\partial e_x/\partial r_{L,x}=s$ and
+$\partial\gamma_x/\partial\G_{n_k,x}=w_k$, hence
+\begin{equation}
+\frac{\partial\mathcal L}{\partial\G_{L,n_k,x}}\mathrel{+}=g_x\,s\,\tilde u_L\,w_k,\qquad
+\frac{\partial\mathcal L}{\partial\G_{L,n_k,y}}\mathrel{+}=g_y\,s\,\tilde v_L\,w_k .
+\end{equation}
+
+\paragraph{Through the perspective division.} With $\mathbf a=\partial\mathcal L/\partial\hat\vr_{R,xy}=(-g_xs,\,-g_ys)$
+and $\hat r_x=w_x/w_z$, $\hat r_y=w_y/w_z$:
+\begin{equation}
+\frac{\partial\mathcal L}{\partial\vw}=\Big[\frac{a_1}{w_z},\;\frac{a_2}{w_z},\;-\frac{a_1w_x+a_2w_y}{w_z^2}\Big]^\top .
+\end{equation}
+
+\paragraph{Right grid and rotation.} Since $\vw=R\vr_R$,
+\begin{equation}
+\frac{\partial\mathcal L}{\partial\vr_R}=R^\top\frac{\partial\mathcal L}{\partial\vw},\qquad
+\frac{\partial\mathcal L}{\partial\omega_j}=\sum_i\Big(\frac{\partial\mathcal L}{\partial\vw_i}\Big)^{\!\top}\frac{\partial R}{\partial\omega_j}\vr_{R,i},
+\end{equation}
+and the right grid receives $(\partial\mathcal L/\partial r_{R,x})\,\tilde u_R\,w_k$ and
+$(\partial\mathcal L/\partial r_{R,y})\,\tilde v_R\,w_k$ exactly as the left one.
+
+\paragraph{Regularisers.} $\nabla\big(\tfrac{\lambda_a}2\|\G-\G_0\|^2\big)=\lambda_a(\G-\G_0)$ and
+$\nabla E_\text{mem}=\mathbf L\,\G$ (\S\ref{sec:reg}).
+
+\paragraph{Verification.} Every component of the gradient is compared with central finite
+differences in the test-suite; the largest relative discrepancy is $1.2\cdot10^{-7}$.
+
+%=====================================================================
+\section{Adam optimiser}
+For each parameter block $\theta\in\{\G_L,\G_R,\vd,\bm\omega\}$ with gradient $g_t$:
+\begin{align}
+m_t&=\beta_1m_{t-1}+(1-\beta_1)g_t, & v_t&=\beta_2v_{t-1}+(1-\beta_2)g_t^2,\\
+\hat m_t&=m_t/(1-\beta_1^t), & \hat v_t&=v_t/(1-\beta_2^t),\\
+\theta_t&=\theta_{t-1}-\eta_t\,\hat m_t/(\sqrt{\hat v_t}+\epsilon), &
+\eta_t&=\eta\big[\alpha+(1-\alpha)\tfrac12(1+\cos(\pi t/T))\big],
+\end{align}
+with $\beta_1=0.9$, $\beta_2=0.999$, $\epsilon=10^{-8}$, a cosine schedule to $\alpha=5\,\%$,
+per-block rates $\eta_\G=\eta_d=2\cdot10^{-3}$, $\eta_\omega=10^{-3}$ and $T=600$ epochs.
+Adam's per-coordinate normalisation matters here because $\G$ (dimensionless), $\vd$ (metres)
+and $\bm\omega$ (radians) have very different gradient scales. After each step
+$\G$ is clipped to $[0.05,5]$ and $d_x\ge0.02$\,m.
+
+\section{Regularisation, gauge and initialisation}\label{sec:reg}
+\subsection{Anchor prior}
+$\lambda_a(\G-\G_0)$ pulls nodes without data back to the pinhole value, so grid cells without
+calibration points cannot drift to unphysical values.
+
+\subsection{Membrane smoothness}
+Real lenses distort smoothly. We penalise the membrane (Dirichlet) energy on the 4-connected
+grid, per channel,
+\begin{equation}
+E_\text{mem}(\G)=\tfrac12\sum_{(i,j)\in\mathcal E}(\G_i-\G_j)^2,\qquad
+\nabla E_\text{mem}=\mathbf L\,\G,
+\end{equation}
+where $\mathbf L$ is the graph Laplacian: $4\G_{ij}-\sum$neighbours in the interior, and the true
+node degree (2 or 3) on the border. (Version 1 applied the interior stencil only, which is not
+the gradient of any energy.)
+
+\subsection{Gauge fixing}
+Scaling every $\gamma$ and $d_x$ by the same factor leaves \eqref{eq:disp} unchanged (exactly
+without rotation, approximately with it), so the absolute scale is not identifiable. We fix it by
+freezing the centre node of $\G_L$ at $\G_0$. Consequently $d_x$ is the baseline \emph{expressed at
+the nominal focal length} $f_0$; it equals the physical baseline only if the true focal length
+is $f_0$. The centre of $\G_R$ stays free so the cameras may differ.
+
+\subsection{Closed-form warm start}
+Linearising $R\approx I+[\bm\omega]_\times$ with nominal $\G$ gives two equations per point that are
+\emph{linear} in $(d_x,d_y,\omega_p,\omega_y,\omega_r)$:
+\begin{align}
+r_{L,x}-r_{R,x}&=d_x/Z+\omega_y-\omega_r\,r_{R,y},\\
+r_{L,y}-r_{R,y}&=d_y/Z-\omega_p+\omega_r\,r_{R,x},
+\end{align}
+solved by weighted least squares (rows scaled by $Z$ so residuals are relative). This DLT-style
+initialisation alone gives 5.2\,\% in-sample error; Adam then refines all 105 parameters
+($2\times50$ grid values, $d_x$, $d_y$ and three angles; 103 free after gauge fixing).
+
+%=====================================================================
+\section{Epipolar geometry and correspondence search}
+\subsection{Forward projection and grid inversion}
+For a left pixel and a candidate depth $Z$: $P=Z\vr_L$, $P_R=R^\top(P-\vd)$,
+$(t_x,t_y)=(P_{R,x},P_{R,y})/P_{R,z}$. The right pixel solves $\tilde u\,\gamma_x(u,v)=t_x$,
+$\tilde v\,\gamma_y(u,v)=t_y$, found by the fixed-point iteration
+\begin{equation}
+u\leftarrow C_X+C_X\,t_x/\gamma_x(u,v),\qquad v\leftarrow C_Y+C_Y\,t_y/\gamma_y(u,v),
+\end{equation}
+which converges in a few steps because $\G$ varies slowly. Sweeping $Z$ uniformly in $1/Z$
+traces the (curved, tilted) epipolar curve. A version-1 style search along the image \emph{row}
+misses the true match by up to ${\sim}40$\,px on this rig because of the roll.
+
+\subsection{Zero-mean normalised cross-correlation}
+For a left template $A$ and right patch $B$,
+\begin{equation}
+\mathrm{ZNCC}(A,B)=\frac{\sum(A_i-\bar A)(B_i-\bar B)}{\sqrt{\sum(A_i-\bar A)^2}\sqrt{\sum(B_i-\bar B)^2}}\in[-1,1],
+\end{equation}
+invariant to affine brightness/contrast changes. It is evaluated at every 1-px sample of the
+epipolar curve ($31\times31$ patches, vectorised); the peak is refined with the parabola through
+the scores $(s_{-1},s_0,s_{+1})$:
+\begin{equation}
+\Delta=\frac{s_{-1}-s_{+1}}{2(s_{-1}-2s_0+s_{+1})}.
+\end{equation}
+\subsection{Left--right consistency and Lucas--Kanade refinement}
+A match is accepted only if searching back from it along the \emph{left} epipolar curve (obtained
+by inverting $\G_L$) returns within 2\,px of the original click, its ZNCC is $\ge0.6$ and the template
+is textured. Occluded or ambiguous points fail this test. The accepted match is refined in 2-D by
+inverse-compositional Lucas--Kanade (translation model, $21\times21$ patch).
+
+\subsection{CLAHE}
+Both images are equalised with contrast-limited adaptive histogram equalisation: per-tile
+histograms clipped at $2\times$ the mean bin, excess redistributed, and the tile mappings blended
+\emph{bilinearly between tile centres} (without blending, tile borders create false texture).
+
+%=====================================================================
+\section{Uncertainty of a measurement}
+Click noise $\sigma_\text{px}$ is propagated to first order through the \emph{complete} model,
+\begin{equation}
+\sigma_{Z,\text{click}}^2=\sum_{p\in\{u_L,v_L,u_R,v_R\}}\Big(\frac{\partial Z}{\partial p}\Big)^2\sigma_\text{px}^2,
+\end{equation}
+with central differences for $\partial Z/\partial p$. $\sigma_\text{px}$ is estimated robustly from the
+epipolar residuals of the calibration ($1.4826\cdot\mathrm{MAD}/\sqrt2$ per click). The model's own
+error $\varepsilon$ (RMS relative LOOCV error) is added in quadrature:
+$\sigma_Z=\sqrt{\sigma_{Z,\text{click}}^2+(\varepsilon Z)^2}$. The app displays $Z\pm\sigma_Z$.
+
+\section{Polynomial post-correction}
+A quadratic $Z_\text{true}\approx a+bZ_\text{pred}+cZ_\text{pred}^2$ fitted by least squares on a Vandermonde
+matrix is implemented (\code{fit\_postcorrection}). Evaluated honestly (re-fitted inside every
+LOOCV fold) it \emph{increases} the error (5.1\,\%$\rightarrow$6.9\,\%): fitted on in-sample residuals of
+an already flexible model it learns noise. It is therefore disabled by default.
+
+%=====================================================================
+\section{Evaluation}\label{sec:eval}
+\subsection{Protocol}
+With $N=27$ labelled points a train/test split would waste data, so all real-data numbers are
+\emph{leave-one-out} cross-validation (LOOCV): $N$ fits on $N-1$ points, each predicting the held-out
+point. Confidence intervals are from 4000 bootstrap resamples of the per-point errors.
+In-sample error is reported only for context; it is optimistic.
+
+\subsection{Real dataset}
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Model & LOOCV MAPE & 95\,\% CI & worst point\\
+\midrule
+v1 original (reproduced exactly) & 10.08\,\% & 5.7--16.3 & 77\,\%\\
+Pinhole + disparity offset (2 params) & 5.90\,\% & 4.3--7.7 & 16\,\%\\
+Pinhole + rotation ($\G$ frozen) & 5.40\,\% & 3.8--7.2 & 18\,\%\\
+$\G$ grid, no rotation & 8.22\,\% & 5.4--11.2 & 28\,\%\\
+\textbf{$\G$ grid + rotation (v2)} & \textbf{5.14\,\%} & 3.3--7.2 & 21\,\%\\
+v2 + quadratic post-correction & 6.89\,\% & 4.4--10.1 & 37\,\%\\
+\bottomrule
+\end{tabular}
+\end{center}
+The paired bootstrap difference v1$-$v2 is 4.9 percentage points (95\,\% CI 0.7--10.4, $p\approx0.008$).
+Three points (two near the right border of the image, one at 2.5\,m on the left) are ${\approx}15\,\%$ off for
+\emph{every} model, including the 2-parameter baseline, and two neighbouring points have opposite
+errors: this is label/click noise, not a model deficiency. The dataset therefore has a noise
+floor near 5\,\% that no model can beat; improvements below it cannot be resolved with 27 points.
+We also tested whether labels are Euclidean range $\|P\|$ rather than depth $Z$: depth fits better
+(5.1\,\% vs 5.9\,\%), so the labels are depths.
+
+\subsection{Controlled synthetic benchmark}
+To measure what the $\G$ grid is worth independently of label noise, we simulate a rig from a
+\emph{different} model family: Brown--Conrady radial distortion ($k_1\!=\!-0.10,k_2\!=\!0.04$ left;
+$-0.08,0.03$ right), unequal focal lengths (2750/2790\,px), off-centre principal points, baseline
+0.20\,m and rotation $(0.15^\circ,0.9^\circ,-1.1^\circ)$. Training points carry click noise $\sigma$ and
+1\,\% label noise; 500 held-out points are scored. Held-out MAPE (mean of 5 seeds):
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+$\sigma=0.5$\,px, $N=$ & 15 & 30 & 60 & 120\\
+\midrule
+Pinhole + offset & 3.95 & 4.09 & 3.85 & 3.90\\
+v1 original & 10.73 & 10.97 & 8.22 & 7.15\\
+Pinhole + rotation & 3.09 & 2.57 & 2.43 & 2.52\\
+\textbf{$\G$ grid + rotation} & \textbf{0.98} & \textbf{0.72} & \textbf{0.62} & \textbf{0.50}\\
+\bottomrule
+\end{tabular}
+\end{center}
+The $\G$ grid is the right idea: once the rotation is modelled it approximates real lens distortion
+4--5$\times$ better than a pinhole model and keeps improving with more data.
+
+\begin{center}
+\includegraphics[width=\linewidth]{figures/synthetic_benchmark.png}
+\end{center}
+
+\subsection{Automatic matching}
+On a ray-traced scene (textured planes at 2, 3.5 and 6\,m plus a floor) seen through the simulated
+rig, 200 random clicks: 80\,\% are accepted by ZNCC + left--right check; 92.5\,\% of accepted matches are
+within 3\,\% of the true depth (median error 0.6\,\%); 17\,ms per click on a CPU.
+
+%=====================================================================
+\section{Computational complexity}
+\begin{itemize}
+\item Ray / interpolation: $O(1)$ per pixel. Triangulation: $O(1)$ ($2\times2$ closed form).
+\item One training epoch: $O(N+|\G|)$, fully vectorised; 600 epochs on 27 points take ${\approx}0.3$\,s.
+\item LOOCV: $N$ fits, ${\approx}6$\,s for $N=27$.
+\item Matching: $O(S\,P^2)$ for $S$ curve samples and $P\times P$ patches, done twice (left--right);
+${\approx}17$\,ms per click at $2592\times1944$.
+\end{itemize}
+
+\section{Numerical stability}
+\begin{enumerate}
+\item Parallel rays: $|\det A^\top A|<10^{-14}$ falls back to $Z=d_x/D$; $D\le0$ or $Z\le0$ returns NaN.
+\item $\G\in[0.05,5]$ and $d_x\ge0.02$\,m prevent negative or infinite focal lengths and division by zero.
+\item The relative loss avoids $Z^2$ gradient growth; Huber caps outlier gradients.
+\item Gauge fixing removes the scale null-space; the anchor prior regularises unobserved cells.
+\item Grid inversion clips intermediate pixels to the image $\pm25\,\%$ and $\gamma\ge10^{-6}$.
+\end{enumerate}
+
+\section{Limitations and future work}
+\begin{itemize}
+\item \textbf{Data} is the bottleneck: 27 points with ${\sim}5\,\%$ label noise. A calibration target
+(chessboard or ArUco board) at several known distances would give hundreds of sub-pixel points; the
+coverage overlay in the app (key \texttt{V}) shows which $\G$ cells lack data.
+\item \textbf{Bundle adjustment}: jointly refining 3-D point positions would allow using
+correspondences without known distance.
+\item \textbf{Multi-scale grids} ($3\times3\to9\times9$) could capture finer distortion once more data exists.
+\item Matching is local (single point); dense disparity (e.g.\ semi-global matching) is out of scope.
+\end{itemize}
+
+%=====================================================================
+\appendix
+\section{Mapping between code and mathematics}
+\begin{center}
+\small
+\begin{tabular}{ll}
+\toprule
+Function (package \texttt{stereo\_gamma}) & Implements\\
+\midrule
+\code{geometry.bilinear\_weights}, \code{interpolate\_gamma} & eq.~\eqref{eq:bilinear}\\
+\code{geometry.rays} & eq.~\eqref{eq:ray}\\
+\code{geometry.rotation\_with\_jacobians} & $R(\bm\omega)$ and $\partial R/\partial\omega_j$\\
+\code{geometry.right\_rays\_in\_left} & eq.~\eqref{eq:rhat}\\
+\code{geometry.membrane\_energy\_grad} & $E_\text{mem}$ and $\mathbf L\G$\\
+\code{model.StereoModel.triangulate} & OLS, eq.~\eqref{eq:tri}\\
+\code{model.StereoModel.triangulate\_gd} & batch GD (+ Nesterov)\\
+\code{model.StereoModel.project\_left\_point\_to\_right} & forward projection + grid inversion\\
+\code{model.StereoModel.depth\_uncertainty} & error propagation\\
+\code{training.objective} & eq.~\eqref{eq:loss} and all gradients\\
+\code{training.huber}, \code{training.Adam} & Huber, Adam\\
+\code{training.linear\_init} & closed-form warm start\\
+\code{training.fit\_postcorrection} & quadratic post-correction\\
+\code{matching.zncc\_scores}, \code{parabolic\_peak} & ZNCC, sub-pixel peak\\
+\code{matching.epipolar\_match} & epipolar search + left--right check\\
+\code{matching.lk\_refine}, \code{matching.clahe} & Lucas--Kanade, CLAHE\\
+\code{evaluation.loocv}, \code{evaluation.metrics} & evaluation protocol\\
+\code{legacy.train\_legacy} & exact re-implementation of v1\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section*{References}
+\small
+\begin{enumerate}[label={[\arabic*]}]
+\item R.~Hartley, A.~Zisserman. \emph{Multiple View Geometry in Computer Vision}, 2nd ed., Cambridge University Press, 2004.
+\item Z.~Zhang. A flexible new technique for camera calibration. \emph{IEEE TPAMI} 22(11), 2000.
+\item D.~C.~Brown. Decentering distortion of lenses. \emph{Photogrammetric Engineering} 32(3), 1966.
+\item P.~J.~Huber. Robust estimation of a location parameter. \emph{Ann. Math. Statist.} 35(1), 1964.
+\item D.~P.~Kingma, J.~Ba. Adam: a method for stochastic optimization. \emph{ICLR}, 2015.
+\item Y.~Nesterov. A method for solving the convex programming problem with convergence rate $O(1/k^2)$. \emph{Soviet Math. Dokl.} 27, 1983.
+\item B.~D.~Lucas, T.~Kanade. An iterative image registration technique with an application to stereo vision. \emph{IJCAI}, 1981.
+\item S.~Baker, I.~Matthews. Lucas--Kanade 20 years on: a unifying framework. \emph{IJCV} 56(3), 2004.
+\item K.~Zuiderveld. Contrast limited adaptive histogram equalization. \emph{Graphics Gems IV}, 1994.
+\item H.~Hirschm\"uller. Stereo processing by semiglobal matching and mutual information. \emph{IEEE TPAMI} 30(2), 2008.
+\item D.~Scharstein, R.~Szeliski. A taxonomy and evaluation of dense two-frame stereo correspondence algorithms. \emph{IJCV} 47, 2002.
+\item D.~Eigen, C.~Puhrsch, R.~Fergus. Depth map prediction from a single image using a multi-scale deep network. \emph{NeurIPS}, 2014.
+\item B.~Efron, R.~Tibshirani. \emph{An Introduction to the Bootstrap}. Chapman \& Hall, 1993.
+\end{enumerate}
+\end{document}

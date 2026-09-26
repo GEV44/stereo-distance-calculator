@@ -5,15 +5,38 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
-  check:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - run: pip install -r requirements.txt
-      - run: python -m py_compile run_math.py collect_points.py
-      - run: python -c "import json; json.load(open('stereo_calibration.json')); json.load(open('cal_pts.json'))"
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    env:
+      SDL_VIDEODRIVER: dummy
+      SDL_AUDIODRIVER: dummy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install numpy pygame matplotlib pytest
+      - run: pytest -q
+      - name: CLI smoke test
+        run: |
+          python -m stereo_gamma --version
+          python -m stereo_gamma train --quiet --out /tmp/cal.json
+          python -m stereo_gamma evaluate --calib /tmp/cal.json
