@@ -36,7 +36,7 @@ All real-data numbers are **nested** leave-one-out cross-validation: every data-
 | Synthetic free-form lens, held-out MAPE (N = 120, σ = 0.5 px) | 7.25 % | **0.36 %** (oracle floor 0.15 %) |
 | Uncertainty ±2σ coverage (out-of-sample) | — | **96 %** (ideal 95 %) |
 | Right-image correspondence | manual click only | **automatic** (epipolar ZNCC + left-right check), 96.1 % precision |
-| Tests | none | **62 tests** incl. finite-difference checks of every gradient and Jacobian |
+| Tests | none | **63 tests** incl. finite-difference checks of every gradient and Jacobian |
 
 Every number is produced by [`scripts/reproduce_results.py`](scripts/reproduce_results.py) and listed in
 [`results/RESULTS.md`](results/RESULTS.md); the PDF's tables are generated from the same
@@ -262,6 +262,7 @@ Or offline:
 python collect_points.py                                   # label pairs in left/ and right/ → training_data.json
 python -m stereo_gamma train --points cal_pts.json --cv    # fit + nested leave-one-out report (~2 min)
 python -m stereo_gamma evaluate                            # per-point residuals, outlier flags
+python -m stereo_gamma evaluate --cv                       # each point predicted by a model trained without it
 ```
 
 ### Use it as a library
@@ -310,7 +311,7 @@ belongs to the original camera order, so measuring and adding calibration points
 
 ## Verification
 
-Checks that the distance is computed correctly — automated in `tests/` (62 tests) and in
+Checks that the distance is computed correctly — automated in `tests/` (63 tests) and in
 `python scripts/audit.py`, which re-runs the calibration-specific checks on any calibration file:
 
 | Check | Result |
@@ -373,14 +374,14 @@ Checks that the distance is computed correctly — automated in `tests/` (62 tes
 ├── docs/                      # MATHEMATICAL_FOUNDATION.pdf + .tex, figures
 ├── results/                   # results.json (with provenance), RESULTS.md, tables.tex
 ├── scripts/                   # reproduce_results.py, make_tex_tables.py
-└── tests/                     # 62 pytest tests
+└── tests/                     # 63 pytest tests
 ```
 
 ## Reproducing and testing
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                                  # 62 tests
+pytest -q                                  # 63 tests
 python scripts/audit.py                    # distance-measurement audit of the shipped calibration (~20 s)
 ruff check .
 python scripts/reproduce_results.py        # every table and figure (~15 min; --fast for a smoke run)

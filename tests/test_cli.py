@@ -24,3 +24,13 @@ def test_shipped_calibration_quality(root, real_points):
     assert np.mean(np.abs(Z / real_points[:, 4] - 1)) < 0.035
     assert m.meta["rel_model_error_source"] == "loocv"
     assert m.meta["loocv"]["mape_pct"] < 6.0
+
+
+def test_evaluate_cv_prints_out_of_sample_table(tmp_path, real_points, capsys):
+    from stereo_gamma.data import save_points
+
+    p = tmp_path / "pts.json"
+    save_points(real_points[:12], p)
+    main(["evaluate", "--cv", "--points", str(p)])
+    out = capsys.readouterr().out
+    assert "out-of-sample" in out and "within 2σ" in out and out.count("%") > 12

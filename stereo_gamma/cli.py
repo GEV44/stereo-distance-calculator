@@ -70,6 +70,8 @@ def cmd_evaluate(a):
     from .evaluation import metrics
     from .model import StereoModel
 
+    if a.cv:
+        return _evaluate_cv(load_points(a.points))
     model, pts = StereoModel.load(a.calib), load_points(a.points)
     Z = model.triangulate(*pts[:, :4].T)[0]
     rel = Z / pts[:, 4] - 1
@@ -79,6 +81,35 @@ def cmd_evaluate(a):
     for i, (p, z, r) in enumerate(zip(pts, Z, rel)):
         flag = "  ← outlier (>3σ robust)" if abs(r) > 3 * mad else ""
         print(f"{i:3d} {p[0]:5.0f} {p[1]:5.0f} {p[2]:5.0f} {p[3]:5.0f}  {p[4]:6.2f}  {z:6.2f}  {100 * r:+6.1f}%{flag}")
+
+
+def _evaluate_cv(pts):
+    """Out-of-sample check: each point is measured by a model trained without it."""
+    from .evaluation import coverage, metrics
+    from .training import train
+
+    n = len(pts)
+    print(f"[evaluate] each of the {n} points is predicted by a model trained on the other {n - 1} "
+          f"({n} full trainings, ~{4 * n} s)\n")
+    print("  #    left px      right px     true(m)  pred(m)   error   ±1σ(m)  in 2σ  straight-line(m)")
+    Zp, S = np.full(n, np.nan), np.full(n, np.nan)
+    for i in range(n):
+        m, _ = train(np.delete(pts, i, axis=0), log=None)
+        uL, vL, uR, vR, Zt = pts[i]
+        Zp[i], S[i], _ = m.depth_uncertainty(uL, vL, uR, vR)
+        inside = "yes" if abs(Zp[i] - Zt) <= 2 * S[i] else "NO ← check this point"
+        print(f"{i:3d}  ({uL:4.0f},{vL:4.0f}) ({uR:4.0f},{vR:4.0f})  {Zt:6.2f}   {Zp[i]:6.3f}  "
+              f"{100 * (Zp[i] / Zt - 1):+6.1f}%  {S[i]:6.3f}   {inside:3s}  {m.range(uL, vL, uR, vR):8.3f}", flush=True)
+    _print_metrics("\n[evaluate] out-of-sample", metrics(Zp, pts[:, 4]))
+    c = coverage(Zp, S, pts[:, 4])
+    print(f"[evaluate] predicted ±σ: {c['within_1sigma_pct']:.0f} % within 1σ, "
+          f"{c['within_2sigma_pct']:.0f} % within 2σ")
+    for lo, hi in ((0.0, 1.5), (1.5, 3.0), (3.0, np.inf)):
+        k = (pts[:, 4] >= lo) & (pts[:, 4] < hi)
+        if k.any():
+            e = np.abs(Zp[k] / pts[k, 4] - 1)
+            print(f"[evaluate]   {lo:.1f}–{hi:.1f} m: {k.sum():2d} points, MAPE {100 * e.mean():.2f} %, "
+                  f"MAE {100 * np.mean(np.abs(Zp[k] - pts[k, 4])):.1f} cm")
 
 
 def cmd_measure(a):
@@ -146,6 +177,8 @@ def main(argv=None):
     s = sub.add_parser("evaluate", help="accuracy of a calibration on labelled points")
     s.add_argument("--calib", default="stereo_calibration.json")
     s.add_argument("--points", default="cal_pts.json")
+    s.add_argument("--cv", action="store_true",
+                   help="out-of-sample: predict each point with a model trained without it (~2 min)")
     s.set_defaults(func=cmd_evaluate)
 
     s = sub.add_parser("demo", help="synthetic scene demo (no camera required)")
