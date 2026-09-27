@@ -110,7 +110,8 @@ class TrainConfig:
     learn_gamma: bool = True
     learn_rotation: bool = True
     warm_start: bool = True  # closed-form linear initialisation of d and ω
-    ensemble: bool = True  # average with a Brown–Conrady companion fitted to the same points
+    ensemble: bool = True  # average with a Brown–Conrady companion fitted to the same points …
+    ensemble_min_points: int = 25  # … once there is enough data for its 18 parameters (synthetic study)
     postcorrection: bool = False  # quadratic Z-correction (PDF §12) — off: see README ablation
     adam_betas: tuple[float, float] = (0.9, 0.999)
     adam_eps: float = 1e-8

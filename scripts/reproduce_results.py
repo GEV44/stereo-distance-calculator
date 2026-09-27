@@ -35,6 +35,7 @@ sys.path.insert(0, ROOT)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 from stereo_gamma import __version__  # noqa: E402
+from stereo_gamma.baselines import BrownConradyStereo  # noqa: E402
 from stereo_gamma.config import TrainConfig  # noqa: E402
 from stereo_gamma.data import load_points  # noqa: E402
 from stereo_gamma.evaluation import (  # noqa: E402
@@ -206,7 +207,9 @@ def synthetic_benchmark(seeds, Ns, sigmas):
                     pin, _ = train(tr, TrainConfig(learn_gamma=False, ensemble=False), log=None)
                     z = {"oracle": rig.triangulate(*q), "offset": np.where(du > b, a / (du - b), np.nan),
                          "legacy": train_legacy(tr).triangulate(*q)[0], "pinrot": pin.triangulate(*q)[0],
-                         "brown": model.companion_model().triangulate(*q), "gamma": model.triangulate_gamma(*q)[0],
+                         "brown": (model.companion_model() if model.companion is not None
+                                   else BrownConradyStereo().fit(tr)).triangulate(*q),
+                         "gamma": model.triangulate_gamma(*q)[0],
                          "v21": model.triangulate(*q)[0]}
                     for m in SYN_MODELS:
                         vals[m].append(metrics(z[m], Zt)["mape_pct"])

@@ -406,7 +406,7 @@ def train(points, cfg: TrainConfig | None = None, sensor: Sensor = DEFAULT_SENSO
         best, history = _fit(work, cfg, sensor, log)
 
     model = _to_model(best[1], sensor)
-    if cfg.ensemble:
+    if cfg.ensemble and len(pts) >= cfg.ensemble_min_points:
         from .baselines import BrownConradyStereo
 
         bc = BrownConradyStereo(sensor, huber_delta=cfg.huber_delta, weight_y=cfg.weight_y)
@@ -441,6 +441,7 @@ def train(points, cfg: TrainConfig | None = None, sensor: Sensor = DEFAULT_SENSO
         "smooth_cv_mape": None if cv_scores is None else {str(k): v for k, v in cv_scores.items()},
         # effective degrees of freedom of the penalised fit and rig-parameter standard errors
         "df_eff": diag.get("df_eff"),
+        "ensemble": model.companion is not None,
         "radial_prior": {"left": [float(v) for v in best[1]["a"][:2]],
                          "right": [float(v) for v in best[1]["a"][2:]]} if cfg.radial_prior else None,
         "stderr": diag.get("stderr"),
