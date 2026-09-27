@@ -27,21 +27,31 @@ class Camera:
     cy: float
     k1: float = 0.0
     k2: float = 0.0
+    p1: float = 0.0  # tangential (decentering) distortion
+    p2: float = 0.0
+    wave: float = 0.0  # non-parametric "moulded lens" waviness (normalised units)
 
-    def project(self, P: np.ndarray):
-        x, y = P[:, 0] / P[:, 2], P[:, 1] / P[:, 2]
+    def distort(self, x, y):
         r2 = x * x + y * y
         k = 1 + self.k1 * r2 + self.k2 * r2 * r2
-        return self.f * x * k + self.cx, self.f * y * k + self.cy
+        xd = x * k + 2 * self.p1 * x * y + self.p2 * (r2 + 2 * x * x)
+        yd = y * k + self.p1 * (r2 + 2 * y * y) + 2 * self.p2 * x * y
+        if self.wave:
+            xd = xd + self.wave * np.sin(7.0 * x + 2.0 * y + 0.4)
+            yd = yd + self.wave * np.cos(6.0 * y - 3.0 * x + 1.1)
+        return xd, yd
 
-    def unproject(self, u, v, iters: int = 10):
+    def project(self, P: np.ndarray):
+        xd, yd = self.distort(P[:, 0] / P[:, 2], P[:, 1] / P[:, 2])
+        return self.f * xd + self.cx, self.f * yd + self.cy
+
+    def unproject(self, u, v, iters: int = 12):
         """Pixel → undistorted normalised ray (fixed-point undistortion)."""
         xd, yd = (np.asarray(u) - self.cx) / self.f, (np.asarray(v) - self.cy) / self.f
         x, y = xd.copy(), yd.copy()
         for _ in range(iters):
-            r2 = x * x + y * y
-            k = 1 + self.k1 * r2 + self.k2 * r2 * r2
-            x, y = xd / k, yd / k
+            dx, dy = self.distort(x, y)
+            x, y = x + (xd - dx), y + (yd - dy)
         return np.stack([x, y, np.ones_like(x)], axis=1)
 
 
@@ -53,14 +63,37 @@ class SyntheticRig:
     omega: np.ndarray = field(default_factory=lambda: np.radians([0.15, 0.9, -1.1]))
     sensor: Sensor = DEFAULT_SENSOR
 
+    @classmethod
+    def freeform(cls) -> SyntheticRig:
+        """
+        Same rig, but each lens also has decentering (p₁, p₂) and a smooth
+        non-radial waviness of ±0.0015 normalised units (≈ ±4 px) — the kind of
+        field a moulded lens or tilted sensor produces and no low-order
+        parametric model describes.
+        """
+        return cls(Camera(2750.0, 1310.0, 960.0, -0.10, 0.04, 4e-4, -3e-4, 1.5e-3),
+                   Camera(2790.0, 1285.0, 985.0, -0.08, 0.03, -2e-4, 5e-4, 1.5e-3))
+
     def scaled(self, k: float) -> SyntheticRig:
         """Same rig at ``k``× the resolution (fast rendering for tests)."""
         def cam(c):
-            return Camera(c.f * k, c.cx * k, c.cy * k, c.k1, c.k2)
+            return Camera(c.f * k, c.cx * k, c.cy * k, c.k1, c.k2, c.p1, c.p2, c.wave)
         s = self.sensor
         return SyntheticRig(cam(self.left), cam(self.right), self.baseline.copy(), self.omega.copy(),
                             Sensor(round(s.width * k), round(s.height * k), s.grid_rows, s.grid_cols,
                                    s.f_init * k))
+
+    def triangulate(self, uL, vL, uR, vR):
+        """
+        *Oracle* depth: OLS triangulation with the true cameras and rig.  On
+        noisy clicks this is the error floor no calibration can beat.
+        """
+        rL = self.left.unproject(np.asarray(uL, float), np.asarray(vL, float))
+        W = self.right.unproject(np.asarray(uR, float), np.asarray(vR, float)) @ rotation(self.omega).T
+        rR = W / W[:, 2:3]
+        a1, a2, d = rL, -rR, self.baseline
+        s11, s12, s22 = (a1 * a1).sum(1), (a1 * a2).sum(1), (a2 * a2).sum(1)
+        return (s22 * (a1 @ d) - s12 * (a2 @ d)) / (s11 * s22 - s12 * s12)
 
     def sample(self, n: int, rng: np.random.Generator, z_range=(0.5, 6.0),
                click_sigma: float = 1.0, label_sigma: float = 0.0, margin: int = 20):

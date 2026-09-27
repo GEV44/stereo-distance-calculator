@@ -12,5 +12,5 @@ from .data import load_points, save_points
 from .model import StereoModel
 from .training import train
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __all__ = ["DEFAULT_SENSOR", "Sensor", "StereoModel", "TrainConfig", "load_points", "save_points", "train"]

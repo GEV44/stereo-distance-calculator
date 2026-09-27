@@ -195,17 +195,26 @@ class App:
             self.cur_Z, self.cur_err = None, "no valid intersection (rays diverge / behind camera)"
             return
         self.cur_Z, self.cur_sigma, self.cur_err = Z, sigma, None
+        self.cur_parts = None
+        if self.model.companion is not None:
+            self.cur_parts = (self.model.triangulate_gamma([uL], [vL], [uR], [vR])[0][0],
+                              float(self.model.companion_model().triangulate([uL], [vL], [uR], [vR])[0]))
         if self.calibrated:
             self.measurements.append(Measurement(uL, vL, uR, vR, Z, sigma, source))
+            z_ols = self.model.triangulate_gamma([uL], [vL], [uR], [vR])[0][0]
             gd, it = self.model.triangulate_gd([uL], [vL], [uR], [vR], max_iter=50000)
-            check = f"{gd[0]:.3f} m in {it} it" if it < 50000 else "not converged"
-            print(f"  Z = {Z:.3f} ± {sigma:.3f} m  [{source}]   (OLS; batch-GD check: {check})")
+            check = f"GD {gd[0]:.4f} m in {it} it" if it < 50000 else "GD not converged"
+            parts = f"Γ-OLS {z_ols:.4f} m, {check}"
+            if self.model.companion is not None:
+                zb = self.model.companion_model().triangulate([uL], [vL], [uR], [vR])[0]
+                parts += f", Brown–Conrady {zb:.4f} m"
+            print(f"  Z = {Z:.3f} ± {sigma:.3f} m  [{source}]   ({parts})")
 
     def retrain(self):
         if len(self.cal_pts) < MIN_CAL_PTS:
             self.say(f"  need {MIN_CAL_PTS} calibration points (have {len(self.cal_pts)})")
             return
-        self.draw_banner(f"Training Γ-grid model on {len(self.cal_pts)} points …")
+        self.draw_banner(f"Calibrating on {len(self.cal_pts)} points (≈3 s) …")
         t0 = time.time()
         self.model, _ = train(np.asarray(self.cal_pts), TrainConfig(), self.sensor, log=None)
         self.model.save(self.calib_path)
@@ -463,6 +472,8 @@ class App:
         y = DISP_H + 8
         if self.cur_Z is not None:
             txt = f"Z = {self.cur_Z:.3f} m  ± {self.cur_sigma:.3f}"
+            if getattr(self, "cur_parts", None):
+                txt += f"      (Γ grid {self.cur_parts[0]:.3f} · Brown–Conrady {self.cur_parts[1]:.3f})"
             scr.blit(self.big.render(txt, True, C_OK), (10, y))
         elif self.cur_err:
             scr.blit(self.big.render(self.cur_err, True, C_BAD), (10, y))

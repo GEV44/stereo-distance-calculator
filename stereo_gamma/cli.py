@@ -42,7 +42,7 @@ def cmd_train(a):
     print(f"[train] dx={d[0]:.4f}  dy={d[1]:+.4f}  pitch={w[0]:+.3f}°  yaw={w[1]:+.3f}°  roll={w[2]:+.3f}°")
     _print_metrics("[train] in-sample", metrics(model.triangulate(*pts[:, :4].T)[0], pts[:, 4]))
     if a.cv:
-        print(f"[train] leave-one-out cross-validation ({len(pts)} fits) …")
+        print(f"[train] nested leave-one-out cross-validation ({len(pts)} full trainings, ~2 min) …")
         z_cv = loocv(pts, cfg)
         m = metrics(z_cv, pts[:, 4])
         _print_metrics("[train] LOOCV    ", m)

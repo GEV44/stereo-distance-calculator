@@ -1,47 +1,62 @@
 """
-Reproduce every number and figure in the README.
+Reproduce every number and figure in the README and the PDF.
 
-    python scripts/reproduce_results.py            # full run (~4 min)
-    python scripts/reproduce_results.py --fast     # fewer seeds / skips the app screenshot
+    python scripts/reproduce_results.py            # full run (~20 min on a laptop CPU)
+    python scripts/reproduce_results.py --fast     # smoke run (fewer seeds, no rendering)
 
 Outputs
-    results/results.json            all metrics (machine-readable)
-    results/RESULTS.md              the tables used in the README
+    results/results.json            all metrics + provenance (machine-readable)
+    results/RESULTS.md              the tables used in the README / PDF
     docs/figures/*.png              figures
+
+Protocol.  Real-data numbers are leave-one-out cross-validation in which every
+data-dependent choice (noise model, regularisation strength λ_s) is made
+inside ``train`` from the N−1 training points only (nested CV).  Synthetic
+numbers are held-out errors on 500 fresh points per seed.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
+import platform
+import subprocess
 import sys
 import time
+import warnings
 from dataclasses import replace
 
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
+from stereo_gamma import __version__  # noqa: E402
 from stereo_gamma.config import TrainConfig  # noqa: E402
 from stereo_gamma.data import load_points  # noqa: E402
 from stereo_gamma.evaluation import (  # noqa: E402
+    bootstrap_ci,
+    coverage,
     fit_disparity_offset,
     loocv,
     loocv_disparity_offset,
     metrics,
+    signflip_test,
 )
 from stereo_gamma.legacy import loocv_legacy, train_legacy  # noqa: E402
+from stereo_gamma.solver import diagnostics  # noqa: E402
 from stereo_gamma.synthetic import SyntheticRig  # noqa: E402
 from stereo_gamma.training import train  # noqa: E402
 
 FIG = os.path.join(ROOT, "docs", "figures")
 RES = os.path.join(ROOT, "results")
 
-# reference palette (validated: see README "Figures")
+# reference palette (validated with the dataviz skill's validator; see README "Figures")
 BLUE, ORANGE, AQUA, YELLOW = "#2a78d6", "#eb6834", "#1baf7a", "#eda100"
-GRAY, INK, INK2, GRID, SURFACE = "#9a9994", "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
+GRAY, LGRAY, INK, INK2, GRID, SURFACE = "#9a9994", "#c9c8c3", "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
 
 
 def style():
@@ -62,75 +77,147 @@ def style():
     return plt
 
 
-def bootstrap_ci(ape, n=4000, seed=0):
-    rng = np.random.default_rng(seed)
-    ape = ape[np.isfinite(ape)]
-    means = rng.choice(ape, (n, len(ape))).mean(1)
-    return float(np.percentile(means, 2.5)), float(np.percentile(means, 97.5))
+def rel(z, Z):
+    return np.asarray(z) / Z - 1
 
 
-# ─── 1. REAL DATA: LOOCV ABLATION ─────────────────────────────────────────────
-def real_ablation(pts):
+# ─── 1. REAL DATA ─────────────────────────────────────────────────────────────
+LADDER = [
+    ("legacy", "v1 original (reproduced exactly)"),
+    ("offset", "Pinhole + disparity offset (2 params)"),
+    ("brown", "Brown–Conrady, 18 params (same loss, FGLS)"),
+    ("g_v20", "Γ grid + rotation, v2.0 loss"),
+    ("g_fgls", "  + estimated noise model (FGLS)"),
+    ("gamma", "  + radial prior  = Γ grid alone (v2.1)"),
+    ("v21", "  + Brown–Conrady companion = **v2.1 default**"),
+    ("v21_norot", "v2.1 without the rig rotation"),
+]
+
+
+def real_experiments(pts):
     Zt = pts[:, 4]
     base = TrainConfig()
-    runs = [
-        ("v1 original (reproduced)", "legacy", lambda: loocv_legacy(pts)),
-        ("Pinhole + disparity offset (2 params)", "offset", lambda: loocv_disparity_offset(pts)),
-        ("Pinhole + rotation (Γ frozen)", "pinrot", lambda: loocv(pts, replace(base, learn_gamma=False))),
-        ("Γ grid, no rotation", "norot", lambda: loocv(pts, replace(base, learn_rotation=False))),
-        ("Γ grid + rotation (v2, default)", "v2", lambda: loocv(pts, base)),
-        ("v2 + quadratic post-correction", "v2pc", lambda: loocv(pts, replace(base, postcorrection=True))),
-    ]
-    out = {}
-    for name, key, fn in runs:
+    preds, t0 = {}, time.time()
+
+    def run(key, fn):
         t = time.time()
-        z = fn()
-        m = metrics(z, Zt)
-        ape = np.abs(z / Zt - 1) * 100
-        m["mape_ci95"] = bootstrap_ci(ape)
-        m["name"], m["pred"] = name, z.tolist()
-        out[key] = m
-        print(f"  {name:42s} MAPE {m['mape_pct']:5.2f}%  [{m['mape_ci95'][0]:.1f}, {m['mape_ci95'][1]:.1f}]"
-              f"  ({time.time() - t:.0f}s)", flush=True)
-    # paired bootstrap: is v2 better than v1?
-    a = np.abs(np.asarray(out["legacy"]["pred"]) / Zt - 1)
-    b = np.abs(np.asarray(out["v2"]["pred"]) / Zt - 1)
-    rng = np.random.default_rng(1)
-    idx = rng.integers(0, len(Zt), (4000, len(Zt)))
-    diff = (a[idx] - b[idx]).mean(1) * 100
-    out["paired_v1_minus_v2"] = {"mean_pct": float(diff.mean()),
-                                 "ci95": [float(np.percentile(diff, 2.5)), float(np.percentile(diff, 97.5))],
-                                 "p_v2_not_better": float((diff <= 0).mean())}
-    return out
+        preds[key] = fn()
+        print(f"  {key:10s} MAPE {100 * np.nanmean(np.abs(rel(preds[key], Zt))):5.2f}%  ({time.time() - t:.0f}s)",
+              flush=True)
+
+    run("legacy", lambda: loocv_legacy(pts))
+    run("offset", lambda: loocv_disparity_offset(pts))
+    run("g_v20", lambda: loocv(pts, replace(base, noise_model="relative", radial_prior=False, ensemble=False)))
+    run("g_fgls", lambda: loocv(pts, replace(base, radial_prior=False, ensemble=False)))
+    z, det = loocv(pts, base, with_details=True)
+    preds["v21"], preds["gamma"], preds["brown"] = z, det["z_gamma"], det["z_companion"]
+    print(f"  v21/gamma/brown from one nested LOOCV  ({time.time() - t0:.0f}s so far)", flush=True)
+    run("v21_norot", lambda: loocv(pts, replace(base, learn_rotation=False)))
+
+    rows = {}
+    for key, name in LADDER:
+        m = metrics(preds[key], Zt)
+        m["mape_ci95"] = bootstrap_ci(100 * np.abs(rel(preds[key], Zt)))
+        m["name"], m["pred"] = name, [float(v) for v in preds[key]]
+        rows[key] = m
+
+    # paired sign-flip permutation tests, Holm–Bonferroni corrected
+    comps = [("v21", "legacy"), ("v21", "brown"), ("v21", "gamma"), ("gamma", "brown"), ("g_fgls", "g_v20")]
+    tests = []
+    for a, b in comps:
+        t = signflip_test(rel(preds[a], Zt), rel(preds[b], Zt))
+        tests.append({"a": a, "b": b, "mean_diff_pp": 100 * t["mean_diff"], "p": t["p_value"]})
+    order = np.argsort([t["p"] for t in tests])
+    m, running = len(tests), 0.0
+    for rank, i in enumerate(order):
+        running = max(running, min(1.0, (m - rank) * tests[i]["p"]))
+        tests[i]["p_holm"] = running
+
+    cov = coverage(preds["v21"], det["sigma"], Zt)
+    corr = float(np.corrcoef(rel(preds["gamma"], Zt), rel(preds["brown"], Zt))[0, 1])
+    return rows, tests, cov, {"sigma": det["sigma"].tolist(), "error_correlation_gamma_brown": corr}
+
+
+def full_model_analysis(pts):
+    """Fit on all points: noise model, error budget, df_eff, parameter uncertainty (Laplace vs bootstrap)."""
+    model, _ = train(pts, TrainConfig(), log=None)
+    Zt = pts[:, 4]
+    click_only = model.copy()
+    click_only.meta["rel_model_error"] = 0.0
+    s_click = np.array([click_only.depth_uncertainty(*p[:4])[2] for p in pts])
+    pred_click_mape = 100 * np.sqrt(2 / np.pi) * float(np.mean(s_click / Zt))
+    sl = model.meta["noise_model"]["sigma_label"]
+    pred_total_mape = 100 * np.sqrt(2 / np.pi) * float(np.mean(np.sqrt((s_click / Zt) ** 2 + sl ** 2)))
+
+    # bootstrap of the rig parameters (Γ-only, fixed λ: isolates estimation noise)
+    cfg_fixed = TrainConfig(auto_smooth=False, smooth=model.meta["smooth_selected"], ensemble=False)
+    rng = np.random.default_rng(0)
+    boot = []
+    for _ in range(200):
+        m, _ = train(pts[rng.integers(0, len(pts), len(pts))], cfg_fixed, log=None)
+        boot.append([m.baseline[0], m.baseline[1], *np.degrees(m.rotation)])
+    boot = np.array(boot)
+    m0, _ = train(pts, cfg_fixed, log=None)
+    a = np.r_[m0.meta["radial_prior"]["left"], m0.meta["radial_prior"]["right"]]
+    th = {"gL": m0.gamma_L, "gR": m0.gamma_R, "d": m0.baseline[:2], "w": m0.rotation, "a": a}
+    from stereo_gamma.training import noise_scales
+
+    nm = m0.meta["noise_model"]
+    w = np.c_[pts, noise_scales(Zt, nm["kappa"], float(np.sqrt(np.mean(Zt ** 2))))]
+    diag = diagnostics(th, w, cfg_fixed, model.sensor)
+    names = ["dx", "dy", "pitch", "yaw", "roll"]
+    vals = [m0.baseline[0], m0.baseline[1], *np.degrees(m0.rotation)]
+    params = {}
+    for k, name in enumerate(names):
+        lap = diag["stderr"][name] * (1 if k < 2 else np.degrees(1))
+        params[name] = {"value": float(vals[k]), "se_laplace": float(lap), "se_bootstrap": float(boot[:, k].std(ddof=1)),
+                        "unit": "m" if k < 2 else "deg"}
+    return model, {
+        "noise_model": model.meta["noise_model"], "smooth_selected": model.meta["smooth_selected"],
+        "smooth_cv_mape": model.meta["smooth_cv_mape"], "df_eff": diag["df_eff"],
+        "n_params": diag["n_params_free"] + 2, "n_params_free": diag["n_params_free"],
+        "n_residuals": diag["n_residuals"], "params": params,
+        "error_budget": {"predicted_mape_click_only_pct": pred_click_mape,
+                         "predicted_mape_click_and_label_pct": pred_total_mape},
+        "radial_prior": model.meta["radial_prior"],
+    }
 
 
 # ─── 2. SYNTHETIC BENCHMARK ───────────────────────────────────────────────────
-def synthetic_benchmark(seeds):
-    rig = SyntheticRig()
-    Ns, sigmas = [15, 30, 60, 120], [0.5, 2.0]
-    models = ["offset", "legacy", "pinrot", "v2"]
-    res = {f"{s}": {m: [] for m in models} for s in sigmas}
-    for s in sigmas:
-        for N in Ns:
-            vals = {m: [] for m in models}
-            for seed in range(seeds):
-                rng = np.random.default_rng(100 + seed)
-                tr, _ = rig.sample(N, rng, click_sigma=s, label_sigma=0.01)
-                te, _ = rig.sample(500, rng, click_sigma=s)
-                a, b = fit_disparity_offset(tr)
-                du = te[:, 0] - te[:, 2]
-                vals["offset"].append(metrics(np.where(du > b, a / (du - b), np.nan), te[:, 4])["mape_pct"])
-                vals["legacy"].append(metrics(train_legacy(tr).triangulate(*te[:, :4].T)[0], te[:, 4])["mape_pct"])
-                for key, cfg in (("pinrot", TrainConfig(learn_gamma=False)), ("v2", TrainConfig())):
-                    m, _ = train(tr, cfg, log=None)
-                    vals[key].append(metrics(m.triangulate(*te[:, :4].T)[0], te[:, 4])["mape_pct"])
-            for m in models:
-                res[f"{s}"][m].append([float(np.mean(vals[m])), float(np.std(vals[m]))])
-            print(f"  σ={s} N={N:3d}  " + "  ".join(f"{m}={np.mean(vals[m]):.2f}%" for m in models), flush=True)
-    return {"N": Ns, "sigmas": sigmas, "results": res}
+SYN_MODELS = ["oracle", "offset", "legacy", "pinrot", "brown", "gamma", "v21"]
 
 
-# ─── 3. MATCHING BENCHMARK ON THE RAY-TRACED SCENE ────────────────────────────
+def synthetic_benchmark(seeds, Ns, sigmas):
+    rigs = {"brown": SyntheticRig(), "freeform": SyntheticRig.freeform()}
+    res = {r: {str(s): {m: [] for m in SYN_MODELS} for s in sigmas} for r in rigs}
+    for rname, rig in rigs.items():
+        for s in sigmas:
+            for N in Ns:
+                vals = {m: [] for m in SYN_MODELS}
+                t = time.time()
+                for seed in range(seeds):
+                    rng = np.random.default_rng(1000 * seed + N)
+                    tr, _ = rig.sample(N, rng, click_sigma=s, label_sigma=0.01)
+                    te, _ = rig.sample(500, rng, click_sigma=s)
+                    q, Zt = te[:, :4].T, te[:, 4]
+                    a, b = fit_disparity_offset(tr)
+                    du = te[:, 0] - te[:, 2]
+                    model, _ = train(tr, TrainConfig(), log=None)
+                    pin, _ = train(tr, TrainConfig(learn_gamma=False, ensemble=False), log=None)
+                    z = {"oracle": rig.triangulate(*q), "offset": np.where(du > b, a / (du - b), np.nan),
+                         "legacy": train_legacy(tr).triangulate(*q)[0], "pinrot": pin.triangulate(*q)[0],
+                         "brown": model.companion_model().triangulate(*q), "gamma": model.triangulate_gamma(*q)[0],
+                         "v21": model.triangulate(*q)[0]}
+                    for m in SYN_MODELS:
+                        vals[m].append(metrics(z[m], Zt)["mape_pct"])
+                for m in SYN_MODELS:
+                    res[rname][str(s)][m].append([float(np.mean(vals[m])), float(np.std(vals[m]))])
+                print(f"  {rname:8s} σ={s} N={N:3d}  " + "  ".join(f"{m}={np.mean(vals[m]):.3f}" for m in SYN_MODELS)
+                      + f"  ({time.time() - t:.0f}s)", flush=True)
+    return {"N": Ns, "sigmas": sigmas, "seeds": seeds, "results": res}
+
+
+# ─── 3. MATCHING ──────────────────────────────────────────────────────────────
 def matching_benchmark(n_clicks=200):
     from stereo_gamma.matching import clahe, epipolar_match, lk_refine
     from stereo_gamma.synthetic import render, scene_points
@@ -156,77 +243,96 @@ def matching_benchmark(n_clicks=200):
         z = model.depth(u, v, m.u, m.v) if m is not None else np.nan
         rows.append((depth[v, u], z, bool(m is not None and m.reliable)))
     a = np.array(rows, float)
-    rel = np.abs(a[:, 1] / a[:, 0] - 1)
+    e = np.abs(a[:, 1] / a[:, 0] - 1)
     acc = a[:, 2] > 0
-    out = {
-        "clicks": n_clicks,
-        "accepted_pct": float(100 * acc.mean()),
-        "precision_pct": float(100 * (rel[acc] < 0.03).mean()),
-        "median_err_pct_accepted": float(100 * np.median(rel[acc])),
-        "mape_pct_accepted": float(100 * np.mean(rel[acc])),
-        "wrong_among_rejected_pct": float(100 * (~(rel[~acc] < 0.03)).mean()) if (~acc).any() else 0.0,
-        "ms_per_click": float(1000 * t_total / n_clicks),
-    }
+    out = {"clicks": n_clicks, "accepted_pct": float(100 * acc.mean()),
+           "precision_pct": float(100 * (e[acc] < 0.03).mean()),
+           "median_err_pct_accepted": float(100 * np.median(e[acc])),
+           "mape_pct_accepted": float(100 * np.mean(e[acc])),
+           "ms_per_click": float(1000 * t_total / n_clicks)}
     print(f"  matching: {out}")
     return out, (rig, left, right, model)
 
 
 # ─── FIGURES ──────────────────────────────────────────────────────────────────
-def fig_real(plt, real, pts):
+def fig_real(plt, rows, pts):
     Zt = pts[:, 4]
-    fig, (a, b) = plt.subplots(1, 2, figsize=(10, 4.2), gridspec_kw={"width_ratios": [1, 1.25]})
+    fig, (a, b) = plt.subplots(1, 2, figsize=(11, 4.4), gridspec_kw={"width_ratios": [1, 1.35]})
     lim = [0, 5.2]
-    a.fill_between(lim, [x * 0.95 for x in lim], [x * 1.05 for x in lim], color=GRID, alpha=0.7, lw=0,
+    a.fill_between(lim, [x * 0.95 for x in lim], [x * 1.05 for x in lim], color=GRID, alpha=0.8, lw=0,
                    label="±5 % band")
     a.plot(lim, lim, color=INK2, lw=0.8)
-    for key, col, lab in (("legacy", ORANGE, "v1 original"), ("v2", BLUE, "v2 (this work)")):
-        z = np.asarray(real[key]["pred"])
-        a.scatter(Zt, z, s=34, color=col, edgecolor=SURFACE, linewidth=1.2, zorder=3,
-                  label=f"{lab} — MAPE {real[key]['mape_pct']:.1f} %")
+    for key, col, lab in (("legacy", ORANGE, "v1 original"), ("v21", BLUE, "v2.1")):
+        a.scatter(Zt, rows[key]["pred"], s=34, color=col, edgecolor=SURFACE, linewidth=1.2, zorder=3,
+                  label=f"{lab} — MAPE {rows[key]['mape_pct']:.1f} %")
     a.set(xlim=lim, ylim=[0, 6.2], xlabel="true distance (m)", ylabel="predicted distance (m)",
-          title="Leave-one-out predictions, 27 real points")
+          title="Nested leave-one-out predictions (27 real points)")
     a.legend(loc="upper left")
 
-    keys = ["legacy", "offset", "pinrot", "norot", "v2", "v2pc"]
-    names = [real[k]["name"] for k in keys]
-    vals = [real[k]["mape_pct"] for k in keys]
-    lo = [v - real[k]["mape_ci95"][0] for v, k in zip(vals, keys)]
-    hi = [real[k]["mape_ci95"][1] - v for v, k in zip(vals, keys)]
+    keys = [k for k, _ in LADDER]
+    names = [rows[k]["name"].replace("**", "") for k in keys]
+    vals = np.array([rows[k]["mape_pct"] for k in keys])
+    lo = vals - np.array([rows[k]["mape_ci95"][0] for k in keys])
+    hi = np.array([rows[k]["mape_ci95"][1] for k in keys]) - vals
     y = np.arange(len(keys))[::-1]
-    cols = [BLUE if k == "v2" else GRAY for k in keys]
-    b.barh(y, vals, height=0.62, color=cols, zorder=2)
+    b.barh(y, vals, height=0.62, color=[BLUE if k == "v21" else GRAY for k in keys], zorder=2)
     b.errorbar(vals, y, xerr=[lo, hi], fmt="none", ecolor=INK2, elinewidth=1, capsize=3, zorder=3)
     for yi, v in zip(y, vals):
-        b.text(0.15, yi, f"{v:.1f} %", va="center", ha="left", color=SURFACE, fontsize=9, weight="bold", zorder=4)
-    b.set_yticks(y, names)
+        b.text(0.12, yi, f"{v:.2f} %", va="center", ha="left", color=SURFACE, fontsize=8.5, weight="bold", zorder=4)
+    b.set_yticks(y, names, fontsize=8.5)
     b.grid(axis="y", visible=False)
-    b.set(xlabel="LOOCV mean absolute % error  (bars: 95 % bootstrap CI)", title="Ablation on the real dataset")
+    b.set(xlabel="LOOCV mean absolute % error  (bars: 95 % bootstrap CI)", title="Ablation ladder")
     fig.tight_layout()
     fig.savefig(os.path.join(FIG, "real_loocv.png"))
     plt.close(fig)
 
 
+def fig_error_vs_distance(plt, rows, extra, pts):
+    Zt = pts[:, 4]
+    e = 100 * rel(rows["v21"]["pred"], Zt)
+    s = 100 * np.asarray(extra["sigma"]) / Zt
+    fig, ax = plt.subplots(figsize=(8, 3.8))
+    ax.axhline(0, color=INK2, lw=0.8)
+    ax.errorbar(Zt, e, yerr=2 * s, fmt="none", ecolor=LGRAY, elinewidth=5, alpha=0.9, zorder=2,
+                label="predicted ±2σ (out-of-sample)")
+    inside = np.abs(e) <= 2 * s
+    ax.scatter(Zt[inside], e[inside], s=30, color=BLUE, edgecolor=SURFACE, lw=1.2, zorder=3, label="error inside 2σ")
+    ax.scatter(Zt[~inside], e[~inside], s=30, color=ORANGE, edgecolor=SURFACE, lw=1.2, zorder=3,
+               label="error outside 2σ")
+    ax.set(xlabel="true distance (m)", ylabel="relative error (%)",
+           title="v2.1 out-of-sample error vs distance, with the model's own uncertainty")
+    ax.legend(loc="upper right", fontsize=8.5)
+    fig.tight_layout()
+    fig.savefig(os.path.join(FIG, "error_vs_distance.png"))
+    plt.close(fig)
+
+
 def fig_synthetic(plt, syn):
-    fig, axes = plt.subplots(1, 2, figsize=(10, 3.9), sharey=True)
-    series = [("offset", "Pinhole + offset", AQUA), ("legacy", "v1 original", ORANGE),
-              ("pinrot", "Pinhole + rotation", YELLOW), ("v2", "Γ grid + rotation (v2)", BLUE)]
+    rigs = [("brown", "Brown–Conrady lens"), ("freeform", "free-form lens (+ decentering, waviness)")]
+    fig, axes = plt.subplots(2, len(syn["sigmas"]), figsize=(11, 7), sharey=True, sharex=True, squeeze=False)
+    series = [("oracle", "oracle (true cameras)", INK2, 1.2), ("offset", "pinhole + offset", LGRAY, 1.5),
+              ("legacy", "v1 original", LGRAY, 1.5), ("pinrot", "pinhole + rotation", GRAY, 1.5),
+              ("brown", "Brown–Conrady", ORANGE, 2), ("gamma", "Γ grid (v2.1)", AQUA, 2),
+              ("v21", "Γ + Brown ensemble (v2.1)", BLUE, 2.2)]
     N = syn["N"]
-    for ax, s in zip(axes, syn["sigmas"]):
-        for key, lab, col in series:
-            r = np.array(syn["results"][f"{s}"][key])
-            ax.plot(N, r[:, 0], color=col, marker="o", ms=5, mec=SURFACE, mew=1.2, label=lab)
-            ax.text(N[-1] * 1.08, r[-1, 0], lab, color=INK2, va="center", fontsize=8.5)
-        ax.set_xscale("log", base=2)
-        ax.set_yscale("log")
-        ax.set_xticks(N, [str(n) for n in N])
-        ax.set_yticks([0.5, 1, 2, 5, 10], ["0.5", "1", "2", "5", "10"])
-        ax.set_xlim(12, 400)
-        ax.set(xlabel="calibration points N", title=f"click noise σ = {s} px")
-    axes[0].set_ylabel("held-out MAPE (%)  — log scale")
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", ncol=4, fontsize=8.5, bbox_to_anchor=(0.5, -0.01))
-    fig.suptitle("Synthetic rig with Brown–Conrady distortion (500 test points, mean of seeds)",
-                 x=0.01, ha="left", fontsize=10, color=INK2)
+    for i, (rk, rtitle) in enumerate(rigs):
+        for j, s in enumerate(syn["sigmas"]):
+            ax = axes[i, j]
+            for key, lab, col, lw in series:
+                r = np.array(syn["results"][rk][str(s)][key])
+                ax.plot(N, r[:, 0], color=col, lw=lw, marker="o" if lw >= 2 else None, ms=4, mec=SURFACE,
+                        mew=1, label=lab, zorder=3 if lw >= 2 else 2)
+            ax.set_xscale("log", base=2)
+            ax.set_yscale("log")
+            ax.set_xticks(N, [str(n) for n in N])
+            ax.set_yticks([0.1, 0.2, 0.5, 1, 2, 5, 10], ["0.1", "0.2", "0.5", "1", "2", "5", "10"])
+            ax.set_title(f"{rtitle}, σ = {s} px", fontsize=10)
+            if i == 1:
+                ax.set_xlabel("calibration points N")
+            if j == 0:
+                ax.set_ylabel("held-out MAPE (%) — log")
+    h, lab = axes[0, 0].get_legend_handles_labels()
+    fig.legend(h, lab, loc="lower center", ncol=4, fontsize=8.5, bbox_to_anchor=(0.5, -0.005))
     fig.tight_layout(rect=(0, 0.07, 1, 1))
     fig.savefig(os.path.join(FIG, "synthetic_benchmark.png"))
     plt.close(fig)
@@ -252,23 +358,30 @@ def fig_gamma(plt, model):
     cb = fig.colorbar(im, ax=axes, fraction=0.02, pad=0.02)
     cb.set_label("deviation from pinhole Γ₀ (%)")
     cb.outline.set_visible(False)
-    fig.suptitle("Learned Γ grids (5×5 nodes over the image); left centre node frozen = gauge",
+    fig.suptitle("Learned Γ grids on the real rig (5×5 nodes over the image; left centre node = scale gauge)",
                  x=0.01, ha="left", fontsize=10, color=INK2)
     fig.savefig(os.path.join(FIG, "gamma_grids.png"), bbox_inches="tight")
     plt.close(fig)
 
 
-def fig_training(plt, hist):
-    h = np.array(hist)
-    fig, (a, b) = plt.subplots(1, 2, figsize=(10, 3.2))
-    a.plot(h[:, 0], 1e3 * h[:, 1], color=BLUE)
-    a.set(xlabel="epoch", ylabel="objective L  (×10⁻³)", title="Training objective (Adam, cosine LR)")
-    b.plot(h[:, 0], 100 * h[:, 2], color=BLUE)
-    b.set(xlabel="epoch", ylabel="in-sample MAPE (%)", title="In-sample error")
-    b.text(h[0, 0] + 20, 100 * h[0, 2], " epoch 0 = closed-form linear warm start", color=INK2,
-           va="bottom", fontsize=8.5)
+def fig_convergence(plt, pts):
+    """LM and Adam on the identical objective: both reach the same minimum."""
+    fixed = dict(auto_smooth=False, ensemble=False, noise_model="relative")
+    _, h_lm = train(pts, TrainConfig(solver="lm", **fixed), log=None)
+    _, h_ad = train(pts, TrainConfig(solver="adam", log_every=5, **fixed), log=None)
+    lm, ad = np.array(h_lm), np.array(h_ad)
+    L_star = min(lm[:, 1].min(), ad[:, 1].min())
+    fig, ax = plt.subplots(figsize=(8, 3.6))
+    for h, col, lab in ((ad, GRAY, "Adam (cosine LR)"), (lm, BLUE, "Levenberg–Marquardt (IRLS)")):
+        gap = np.maximum(h[:, 1] - L_star, 1e-16) / L_star
+        ax.plot(np.maximum(h[:, 0], 1), gap, color=col, marker="o" if col == BLUE else None, ms=3, label=lab)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set(xlabel="iteration / epoch", ylabel="relative sub-optimality (L − L*) / L*",
+           title="Two independent optimisers converge to the same minimum")
+    ax.legend(loc="upper right")
     fig.tight_layout()
-    fig.savefig(os.path.join(FIG, "training_curve.png"))
+    fig.savefig(os.path.join(FIG, "convergence.png"))
     plt.close(fig)
 
 
@@ -296,27 +409,54 @@ def app_screenshot(scene):
             os.remove(p)
 
 
-def write_markdown(real, syn, match):
-    L = ["## Real dataset — leave-one-out cross-validation (27 points)", "",
-         "| Model | MAE (m) | MAPE | 95 % CI | median APE | δ<1.05 | worst |",
-         "|---|---|---|---|---|---|---|"]
-    for k in ["legacy", "offset", "pinrot", "norot", "v2", "v2pc"]:
-        m = real[k]
-        L.append(f"| {m['name']} | {m['mae_m']:.3f} | **{m['mape_pct']:.2f} %** | "
-                 f"{m['mape_ci95'][0]:.1f}–{m['mape_ci95'][1]:.1f} % | {m['median_ape_pct']:.2f} % | "
-                 f"{m['delta_1.05_pct']:.0f} % | {m['max_ape_pct']:.1f} % |")
-    p = real["paired_v1_minus_v2"]
-    L += ["", f"Paired bootstrap, v1 − v2 MAPE: **{p['mean_pct']:.2f} pp** "
-              f"(95 % CI {p['ci95'][0]:.2f} – {p['ci95'][1]:.2f}), P(v2 not better) = {p['p_v2_not_better']:.3f}", ""]
-    L += ["## Synthetic rig — held-out MAPE (%)", ""]
-    names = {"offset": "Pinhole + offset", "legacy": "v1 original", "pinrot": "Pinhole + rotation",
-             "v2": "**Γ grid + rotation (v2)**"}
-    for s in syn["sigmas"]:
-        L += [f"Click noise σ = {s} px", "", "| Model | " + " | ".join(f"N={n}" for n in syn["N"]) + " |",
-              "|---|" + "---|" * len(syn["N"])]
-        for k, nm in names.items():
-            L.append(f"| {nm} | " + " | ".join(f"{m:.2f} ± {sd:.2f}" for m, sd in syn["results"][f"{s}"][k]) + " |")
-        L.append("")
+# ─── REPORT ───────────────────────────────────────────────────────────────────
+NAMES = {"legacy": "v1", "offset": "offset", "brown": "Brown–Conrady", "gamma": "Γ alone", "v21": "v2.1",
+         "g_v20": "Γ v2.0 loss", "g_fgls": "Γ + FGLS"}
+
+
+def write_markdown(rows, tests, cov, extra, full, syn, match):
+    L = ["# Results", "", f"_Generated by `scripts/reproduce_results.py` (stereo_gamma {__version__})._", "",
+         "## Real dataset — nested leave-one-out cross-validation (27 points)", "",
+         "| Model | MAE (m) | RMSE (m) | MAPE | 95 % CI | median | δ<1.05 | δ<1.10 | worst |",
+         "|---|---|---|---|---|---|---|---|---|"]
+    for k, _ in LADDER:
+        m = rows[k]
+        L.append(f"| {m['name']} | {m['mae_m']:.3f} | {m['rmse_m']:.3f} | {m['mape_pct']:.2f} % | "
+                 f"{m['mape_ci95'][0]:.1f}–{m['mape_ci95'][1]:.1f} | {m['median_ape_pct']:.2f} % | "
+                 f"{m['delta_1.05_pct']:.0f} % | {m['delta_1.10_pct']:.0f} % | {m['max_ape_pct']:.1f} % |")
+    L += ["", "### Paired significance tests (sign-flip permutation, 20 000 draws, Holm-corrected)", "",
+          "| Comparison | Δ MAPE (pp) | p | p (Holm) |", "|---|---|---|---|"]
+    for t in tests:
+        L.append(f"| {NAMES[t['a']]} vs {NAMES[t['b']]} | {t['mean_diff_pp']:+.2f} | {t['p']:.4f} | {t['p_holm']:.4f} |")
+    L += ["", "### Uncertainty calibration (v2.1, out-of-sample)", "",
+          f"- |error| ≤ 1σ: **{cov['within_1sigma_pct']:.0f} %** (Gaussian ideal 68 %); "
+          f"≤ 2σ: **{cov['within_2sigma_pct']:.0f} %** (ideal 95 %); RMS z-score {cov['rms_z']:.2f} (ideal 1)",
+          f"- correlation of Γ and Brown–Conrady out-of-sample errors: {extra['error_correlation_gamma_brown']:.2f}", "",
+          "### Fit on all 27 points", "",
+          f"- selected λ_s = {full['smooth_selected']}; estimated noise: label σ = "
+          f"{100 * full['noise_model']['sigma_label']:.1f} % of depth, click σ = {full['noise_model']['sigma_px']:.1f} px, "
+          f"κ = {full['noise_model']['kappa']:.2f} m",
+          f"- parameters: {full['n_params']} ({full['n_params_free']} free); **effective degrees of freedom "
+          f"{full['df_eff']:.1f}**; residuals {full['n_residuals']}",
+          f"- error budget: click noise alone predicts {full['error_budget']['predicted_mape_click_only_pct']:.2f} % MAPE, "
+          f"click + label noise {full['error_budget']['predicted_mape_click_and_label_pct']:.2f} %; "
+          f"observed (nested LOOCV) {rows['v21']['mape_pct']:.2f} %", "",
+          "| Rig parameter | value | s.e. (sandwich) | s.e. (bootstrap, 200) |", "|---|---|---|---|"]
+    for k, p in full["params"].items():
+        f = "{:.4f}" if p["unit"] == "m" else "{:.3f}"
+        L.append(f"| {k} ({p['unit']}) | {f.format(p['value'])} | {f.format(p['se_laplace'])} | "
+                 f"{f.format(p['se_bootstrap'])} |")
+    names = {"oracle": "Oracle (true cameras) — noise floor", "offset": "Pinhole + offset", "legacy": "v1 original",
+             "pinrot": "Pinhole + rotation", "brown": "Brown–Conrady (18 params)", "gamma": "Γ grid alone",
+             "v21": "**Γ + Brown ensemble (v2.1)**"}
+    L += ["", f"## Synthetic rigs — held-out MAPE (%), mean ± sd over {syn['seeds']} seeds", ""]
+    for rk, rt in (("brown", "Brown–Conrady lens"), ("freeform", "Free-form lens")):
+        for s in syn["sigmas"]:
+            L += [f"**{rt}, click noise σ = {s} px**", "", "| Model | " + " | ".join(f"N={n}" for n in syn["N"]) + " |",
+                  "|---|" + "---|" * len(syn["N"])]
+            for k, nm in names.items():
+                L.append(f"| {nm} | " + " | ".join(f"{m:.3f} ± {sd:.3f}" for m, sd in syn["results"][rk][str(s)][k]) + " |")
+            L.append("")
     if match:
         L += ["## Automatic matching on the ray-traced scene", "",
               f"- clicks: {match['clicks']}, accepted by ZNCC + left-right check: {match['accepted_pct']:.0f} %",
@@ -328,6 +468,16 @@ def write_markdown(real, syn, match):
         f.write("\n".join(L))
 
 
+def provenance():
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    except OSError:
+        commit = None
+    return {"date": dt.datetime.now().isoformat(timespec="seconds"), "git_commit": commit,
+            "stereo_gamma": __version__, "python": platform.python_version(), "numpy": np.__version__,
+            "platform": platform.platform()}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fast", action="store_true")
@@ -336,25 +486,31 @@ def main():
     os.makedirs(RES, exist_ok=True)
     plt = style()
     pts = load_points(os.path.join(ROOT, "cal_pts.json"))
+    t0 = time.time()
 
-    print("[1/4] real-data ablation (LOOCV)")
-    real = real_ablation(pts)
-    print("[2/4] synthetic benchmark")
-    syn = synthetic_benchmark(2 if a.fast else 5)
-    print("[3/4] matching benchmark")
+    print("[1/5] real data: nested LOOCV ablation ladder")
+    rows, tests, cov, extra = real_experiments(pts)
+    print("[2/5] real data: full-data fit, error budget, parameter uncertainty")
+    model, full = full_model_analysis(pts)
+    print("[3/5] synthetic benchmark")
+    syn = (synthetic_benchmark(1, [30, 120], [0.5]) if a.fast
+           else synthetic_benchmark(3, [15, 30, 60, 120, 480], [0.5, 2.0]))
+    print("[4/5] matching benchmark")
     match, scene = (None, None) if a.fast else matching_benchmark()
-    print("[4/4] figures")
-    model, hist = train(pts, replace(TrainConfig(), log_every=10), log=None)
-    fig_real(plt, real, pts)
+    print("[5/5] figures")
+    fig_real(plt, rows, pts)
+    fig_error_vs_distance(plt, rows, extra, pts)
     fig_synthetic(plt, syn)
     fig_gamma(plt, model)
-    fig_training(plt, hist)
+    fig_convergence(plt, pts)
     if scene is not None:
         app_screenshot(scene)
+    out = {"provenance": provenance(), "real_loocv": rows, "significance": tests, "coverage": cov,
+           "real_extra": extra, "full_fit": full, "synthetic": syn, "matching": match}
     with open(os.path.join(RES, "results.json"), "w", encoding="utf-8") as f:
-        json.dump({"real_loocv": real, "synthetic": syn, "matching": match}, f, indent=1)
-    write_markdown(real, syn, match)
-    print(f"done → {RES}/ and {FIG}/")
+        json.dump(out, f, indent=1, default=float)
+    write_markdown(rows, tests, cov, extra, full, syn, match)
+    print(f"done in {time.time() - t0:.0f}s → {RES}/ and {FIG}/")
 
 
 if __name__ == "__main__":

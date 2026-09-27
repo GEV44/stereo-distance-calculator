@@ -3,8 +3,8 @@ message: "If you use this software, please cite it as below."
 title: "Stereo Distance Calculator: a Γ-grid stereo camera model with analytic gradients"
 authors:
   - given-names: Gevorg
-version: 2.0.0
-date-released: 2026-09-26
+version: 2.1.0
+date-released: 2026-09-27
 license: MIT
 repository-code: "https://github.com/GEV44/stereo-distance-calculator"
 keywords:

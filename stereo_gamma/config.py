@@ -85,10 +85,14 @@ class TrainConfig:
                + λ_a · ½‖Γ − Γ₀‖²                       (anchor prior)
                + λ_s · ½ Σ_edges (Γ_i − Γ_j)²            (membrane smoothness)
 
-    minimised with Adam.  The ``learn_*`` switches exist for ablation studies.
+    minimised by Levenberg–Marquardt (default, IRLS for the Huber loss) or by
+    Adam; both reach the same optimum (see tests).  The ``learn_*`` switches
+    exist for ablation studies.
     """
 
-    epochs: int = 600  # converges in ~100; LOOCV identical to 1500 (5 d.p.)
+    solver: str = "lm"  # "lm" | "adam"
+    lm_max_iter: int = 200
+    epochs: int = 6000  # Adam only: reaches the LM optimum to ~1e-13 relative (tests)
     lr_gamma: float = 2e-3
     lr_baseline: float = 2e-3
     lr_rotation: float = 1e-3
@@ -96,10 +100,17 @@ class TrainConfig:
     huber_delta: float = 0.05  # 5 % relative disparity error
     weight_y: float = 0.5  # λ_y — weight of the epipolar (vertical) term
     anchor: float = 3e-3  # λ_a — pull towards the pinhole prior Γ₀
-    smooth: float = 0.3  # λ_s — chosen by LOOCV (see README, 'Hyper-parameters')
+    smooth: float = 0.3  # λ_s — used as-is when auto_smooth is False
+    auto_smooth: bool = True  # choose λ_s by inner k-fold CV on the training points
+    smooth_grid: tuple[float, ...] = (0.01, 0.03, 0.1, 0.3, 1.0, 3.0)
+    cv_folds: int = 5
+    cv_repeats: int = 3  # repeated k-fold: averages out the luck of one shuffle
+    noise_model: str = "fgls"  # "fgls": estimated click/label noise → ML weights | "relative"
+    radial_prior: bool = True  # shrink Γ towards a learned radial field Γ₀(1 + a₁r² + a₂r⁴), not a constant
     learn_gamma: bool = True
     learn_rotation: bool = True
     warm_start: bool = True  # closed-form linear initialisation of d and ω
+    ensemble: bool = True  # average with a Brown–Conrady companion fitted to the same points
     postcorrection: bool = False  # quadratic Z-correction (PDF §12) — off: see README ablation
     adam_betas: tuple[float, float] = (0.9, 0.999)
     adam_eps: float = 1e-8
@@ -108,4 +119,5 @@ class TrainConfig:
     def to_dict(self) -> dict:
         d = asdict(self)
         d["adam_betas"] = list(self.adam_betas)
+        d["smooth_grid"] = list(self.smooth_grid)
         return d

@@ -45,6 +45,7 @@ class StereoModel:
     sensor: Sensor = DEFAULT_SENSOR
     postcorr: np.ndarray | None = None  # [a, b, c] :  Z ← a + bZ + cZ²
     meta: dict = field(default_factory=dict)
+    companion: np.ndarray | None = None  # Brown–Conrady parameters of the ensemble partner (or None)
 
     # ── construction ─────────────────────────────────────────────────────────
     @classmethod
@@ -58,6 +59,7 @@ class StereoModel:
             self.gamma_L.copy(), self.gamma_R.copy(), self.baseline.copy(),
             self.rotation.copy(), self.sensor,
             None if self.postcorr is None else self.postcorr.copy(), dict(self.meta),
+            None if self.companion is None else self.companion.copy(),
         )
 
     @property
@@ -72,14 +74,31 @@ class StereoModel:
         """Right rays in the left frame, normalised to z = 1."""
         return right_rays_in_left(self.sensor, self.gamma_R, self.rotation, uR, vR)[0]
 
-    def triangulate(self, uL, vL, uR, vR, correct: bool = True):
+    def triangulate(self, uL, vL, uR, vR, correct: bool = True, ensemble: bool = True):
         """
-        OLS triangulation (normal equations, closed-form 2×2 inverse), vectorised.
+        Depth along the left optical axis (m), vectorised.  Returns ``(Z, ok)``.
 
-        Returns ``(Z, ok)`` — depth along the left optical axis (m) and a
-        validity mask.  Invalid entries (parallel rays, point behind the rig)
-        are NaN.
+        The Γ-grid depth is the OLS triangulation (normal equations,
+        closed-form 2×2 inverse).  If the model carries a Brown–Conrady
+        ``companion`` and ``ensemble`` is true, the result is the equal-weight
+        average of the two models' depths (see README, "Model averaging").
+        Invalid entries (parallel rays, point behind the rig) are NaN.
         """
+        Z, ok = self.triangulate_gamma(uL, vL, uR, vR)
+        if ensemble and self.companion is not None:
+            Zb = self.companion_model().triangulate(uL, vL, uR, vR)
+            Z = np.where(ok & np.isfinite(Zb), 0.5 * (Z + Zb), Z)
+        if correct and self.postcorr is not None:
+            Z = self.apply_postcorr(Z)
+        return Z, ok
+
+    def companion_model(self):
+        from .baselines import BrownConradyStereo
+
+        return BrownConradyStereo(self.sensor, np.asarray(self.companion, float))
+
+    def triangulate_gamma(self, uL, vL, uR, vR):
+        """Γ-grid OLS triangulation only.  Returns ``(Z, ok)``."""
         rL = self.left_rays(uL, vL)
         rR = self.right_rays(uR, vR)
         a1, a2 = rL, -rR
@@ -95,10 +114,7 @@ class StereoModel:
                          (s22 * b1 - s12 * b2) / det,
                          d[0] / disp)                      # near-singular 1-D fallback
         ok = np.isfinite(Z) & (Z > 0) & (disp > 1e-9)
-        Z = np.where(ok, Z, np.nan)
-        if correct and self.postcorr is not None:
-            Z = self.apply_postcorr(Z)
-        return Z, ok
+        return np.where(ok, Z, np.nan), ok
 
     def depth(self, uL, vL, uR, vR) -> float:
         """Convenience scalar version of :meth:`triangulate`."""
@@ -117,6 +133,7 @@ class StereoModel:
         which needs only O(√κ) steps.  Either way the result converges to the
         closed-form OLS solution, which is why OLS is the authoritative path.
 
+        It solves the Γ-grid problem only (compare with :meth:`triangulate_gamma`).
         Returns ``(Z, iterations)``; ``iterations == max_iter`` means the
         relative gradient norm did not reach ``tol``.
         """
@@ -140,10 +157,7 @@ class StereoModel:
             x = x_new
             if float(np.max(np.linalg.norm(g, axis=1) / scale)) < tol:
                 break
-        Z = x[:, 0]
-        if self.postcorr is not None:
-            Z = self.apply_postcorr(Z)
-        return Z, it
+        return x[:, 0], it
 
     # ── post-correction (PDF §12) ────────────────────────────────────────────
     def apply_postcorr(self, Z):
@@ -275,6 +289,10 @@ class StereoModel:
             "rotation_rad": {"pitch": float(self.rotation[0]), "yaw": float(self.rotation[1]),
                              "roll": float(self.rotation[2])},
             "postcorrection": None if self.postcorr is None else [float(x) for x in self.postcorr],
+            "companion": None if self.companion is None else {
+                "type": "brown_conrady",
+                "layout": "cxL cyL k1L k2L p1L p2L fR cxR cyR k1R k2R p1R p2R pitch yaw roll dx dy",
+                "params": [float(x) for x in self.companion]},
             "meta": self.meta,
         }
 
@@ -291,8 +309,10 @@ class StereoModel:
             rot = p.get("rotation_rad", {})
             omega = np.array([rot.get("pitch", 0.0), rot.get("yaw", 0.0), rot.get("roll", 0.0)])
             pc = p.get("postcorrection")
+            comp = p.get("companion")
             model = cls(gL, gR, _baseline(p), omega, sensor,
-                        None if pc is None else np.asarray(pc, float), dict(p.get("meta", {})))
+                        None if pc is None else np.asarray(pc, float), dict(p.get("meta", {})),
+                        None if comp is None else np.asarray(comp["params"], float))
         elif "gamma_L_4x4" in p:  # v1 — single γ per node, no rotation
             sensor = DEFAULT_SENSOR
             grids = []
