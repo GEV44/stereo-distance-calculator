@@ -325,6 +325,13 @@ def fig_synthetic(plt, syn):
                 r = np.array(syn["results"][rk][str(s)][key])
                 ax.plot(N, r[:, 0], color=col, lw=lw, marker="o" if lw >= 2 else None, ms=4, mec=SURFACE,
                         mew=1, label=lab, zorder=3 if lw >= 2 else 2)
+            if i == 0 and j == 0:  # name the gray context lines directly (legend colours coincide)
+                for key, lab in (("legacy", "v1 original"), ("offset", "pinhole + offset"),
+                                 ("pinrot", "pinhole + rotation"), ("oracle", "oracle")):
+                    y = syn["results"][rk][str(s)][key][0][0]
+                    below = key == "pinrot"
+                    ax.text(N[0] * 1.06, y / 1.12 if below else y * 1.12, lab, color=INK2, fontsize=7.5,
+                            va="top" if below else "bottom")
             ax.set_xscale("log", base=2)
             ax.set_yscale("log")
             ax.set_xticks(N, [str(n) for n in N])

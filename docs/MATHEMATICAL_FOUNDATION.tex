@@ -247,7 +247,11 @@ parameters, $f_L=f_0$ as gauge). It is fitted with \emph{the same residuals, Hub
 out-of-sample errors correlate with the $\G$ grid's at only $\rho=\ErrCorr$. For two unbiased predictors of equal
 error variance $\sigma^2$, the equal-weight average has variance $\tfrac{\sigma^2}{2}(1+\rho)$ (Bates \& Granger 1969).
 Averaging therefore reduces error unless $\rho\approx1$. v2.1 reports the equal-weight average of both depths. The
-weights are fixed in advance, not fitted, so the averaging introduces no selection bias. The $\G$ grid remains the
+weights are fixed in advance, not fitted, so the averaging introduces no selection bias. The companion is used only
+from 25 calibration points: with fewer, its 18 parameters are poorly determined and averaging hurts (synthetic
+study, \S\ref{sec:eval}). On simulated lenses the $\G$ grid alone is often the best single model (it beats
+Brown--Conrady in 16 of 20 settings); on the real rig the average is better, which we attribute to
+real-world effects outside either model. The $\G$ grid remains the
 geometric engine (epipolar curves, matching, uncertainty).
 
 %=====================================================================
