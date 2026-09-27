@@ -13,9 +13,11 @@ learning**. The derivation, a proof that the Γ grid generalises radial lens dis
 evaluation are in [`docs/MATHEMATICAL_FOUNDATION.pdf`](docs/MATHEMATICAL_FOUNDATION.pdf).
 
 ![Measuring app on the ray-traced demo scene](docs/figures/app_demo.png)
-<sub>The measuring app on the built-in ray-traced demo scene (ground truth: box 2.0 m, panel 3.5 m).
-Clicking the left image searches the curved epipolar line in the right image; accepted matches are
-measured instantly as <i>Z ± σ</i>, with both ensemble members shown.</sub>
+<sub>The measuring app on the built-in ray-traced demo scene (ground truth: box 2.0 m, panel 3.5 m,
+wall 6.0 m). Clicking the left image searches the curved epipolar line in the right image; accepted
+matches are measured instantly as depth <i>Z ± σ</i> and straight-line distance, with both ensemble
+members shown. The wall (5.99 m) lies beyond the depths used for calibration, so it is flagged
+EXTRAPOLATED; <b>M</b> gives the 3-D length between the last two points.</sub>
 
 ---
 
@@ -34,7 +36,7 @@ All real-data numbers are **nested** leave-one-out cross-validation: every data-
 | Synthetic free-form lens, held-out MAPE (N = 120, σ = 0.5 px) | 7.25 % | **0.36 %** (oracle floor 0.15 %) |
 | Uncertainty ±2σ coverage (out-of-sample) | — | **96 %** (ideal 95 %) |
 | Right-image correspondence | manual click only | **automatic** (epipolar ZNCC + left-right check), 96.1 % precision |
-| Tests | none | **55 tests** incl. finite-difference checks of every gradient and Jacobian |
+| Tests | none | **62 tests** incl. finite-difference checks of every gradient and Jacobian |
 
 Every number is produced by [`scripts/reproduce_results.py`](scripts/reproduce_results.py) and listed in
 [`results/RESULTS.md`](results/RESULTS.md); the PDF's tables are generated from the same
@@ -270,8 +272,60 @@ from stereo_gamma import StereoModel, load_points, train
 model, _ = train(load_points("cal_pts.json"))
 Z = model.depth(uL=1546, vL=1028, uR=1250, vR=1050)            # → 2.55 m (label: 2.50 m)
 Z, sigma, _ = model.depth_uncertainty(1546, 1028, 1250, 1050)
+X, Y, Z = model.point_3d([1546], [1028], [1250], [1050])[0]    # lateral scale from known lengths, see above
 print(model.meta["df_eff"], model.meta["noise_model"], model.meta["stderr"])
 ```
+
+## What exactly is measured
+
+| Quantity | Definition | Where |
+|---|---|---|
+| **Depth Z** | distance along the left camera's optical axis to the plane through the point — what the calibration labels are (tested: depth fits the 27 labels better than straight-line range, 5.1 % vs 5.9 %) | HUD, CSV `Z_depth_m`, `model.depth()` |
+| **Straight-line distance** | ‖P‖ from the left camera's optical centre; equals Z on the axis and is up to **21 % longer** in the image corners | HUD, CSV `range_m`, `model.range()` |
+| **3-D point** | P = Z · ray_L = [X, Y, Z] in the left-camera frame (x right, y down) | CSV `X_m Y_m`, `model.point_3d()` |
+| **Length** | ‖P₁ − P₂‖ between the last two measurements (e.g. an object's width), with propagated σ | key **M** |
+| **Lateral scale k** | X and Y are multiplied by k (see below); fitted from known lengths | key **L**, `model.fit_lateral_scale()` |
+| **± σ** | click noise propagated through the model ⊕ the model's cross-validated error; 0.5 px for automatic sub-pixel matches, the estimated click σ for hand clicks | HUD, CSV `sigma_m` |
+
+**Depth is fully determined by the calibration; lateral size needs one more number.** Calibration labels
+are depths, and depths only determine the product *focal length × baseline*. The absolute focal length —
+and with it the lateral coordinates X, Y and every length with a sideways component — is therefore set by
+the assumed $f_0$ = 2880 px. On a simulated rig whose true focal length is 2750 px this makes lengths
+2 % too short while depths stay exact. Fix it once in either of two ways:
+
+- measure the two ends of any **known length** (a ruler, a door width), press **L** and type it — the
+  lateral scale $k=f_0/f_\text{true}$ is fitted by least squares from all such references (stored in the
+  calibration and re-fitted after every retraining); on the simulated rig three references bring the
+  length bias from −2 % to below 0.4 %;
+- or, if the camera's focal length is known (focal length in mm ÷ pixel pitch in mm), train with
+  `python -m stereo_gamma train --focal-px <f>`.
+
+Until one of these is done, lengths and X, Y carry an unknown scale error of the order of
+$|f_0/f_\text{true}-1|$; depths do not.
+
+Depths outside 0.8 × … 1.25 × the calibrated range (0.41–4.74 m for the shipped calibration) are flagged
+**EXTRAPOLATED** in red. Pressing **T** swaps the displayed images for inspection only — the calibration
+belongs to the original camera order, so measuring and adding calibration points are disabled until
+**T** is pressed again (in v1 a swap silently produced wrong distances and wrong calibration points).
+
+## Verification
+
+Checks that the distance is computed correctly — automated in `tests/` (62 tests) and in
+`python scripts/audit.py`, which re-runs the calibration-specific checks on any calibration file:
+
+| Check | Result |
+|---|---|
+| Project a 3-D point into the right image, triangulate back (shipped calibration, 1 953 random points, 0.3–30 m) | max relative error **7 × 10⁻⁹** |
+| Simulated distortion-free rig with known geometry → recovered baseline and angles | d = 0.25000 m, ω = (0.300°, 1.200°, −0.800°) — **exact** |
+| Ray-traced scene, full pipeline click → ZNCC → LR check → LK → depth (200 clicks) | 96 % of accepted matches within 3 % of the true depth, median 0.41 % |
+| Ray-traced scene: straight-line distance ‖P‖ and point-to-point lengths | ‖P‖ median error 0.49 %; lengths exact up to the lateral scale (−2 % with f₀ = 2880 vs true 2750 px → ±0.4 % after 3 known lengths) |
+| Oracle comparison (true cameras on the same noisy clicks) | v2.1 within 3–17 % of the physical error floor at σ = 2 px, N ≥ 120 |
+| Every analytic gradient and Jacobian entry vs central finite differences | ≤ 10⁻⁷ / 5 × 10⁻⁶ relative |
+| Levenberg–Marquardt vs Adam on the same objective | same minimum (10⁻¹⁰ relative), gradient < 10⁻⁷ at the solution |
+| OLS vs batch gradient descent triangulation | agree to 10⁻⁸ |
+| Assumed focal length f₀ from −20 % to +38 % of the truth | held-out MAPE changes ≤ 0.04 pp |
+| v1 file format and algorithm | v1 calibrations load and reproduce v1 depths; `legacy.py` ≡ original code to 10⁻¹² |
+| Dependencies | the vision and optimisation maths is all in this repository (NumPy); no OpenCV calibration/stereo functions, no SciPy, no pretrained models — OpenCV only opens images in the labelling tool, Pygame only draws the UI |
 
 ## Controls
 
@@ -286,7 +340,9 @@ print(model.meta["df_eff"], model.meta["noise_model"], model.meta["stderr"])
 | **R** | Clear measurements |
 | **A** | Toggle auto-match |
 | **V** | Toggle Γ-cell coverage overlay |
-| **T** | Swap left/right images |
+| **M** | 3-D length between the last two measurements |
+| **L** | Declare the last two measurements a known length → calibrates the lateral scale |
+| **T** | Swap left/right images (view only — measuring disabled while swapped) |
 | **S** / **E** | Screenshot / export measurements to CSV |
 | **Wheel** / **right-drag** | Zoom / pan |
 | **H** / **Esc** | Help / quit (or cancel) |
@@ -317,14 +373,15 @@ print(model.meta["df_eff"], model.meta["noise_model"], model.meta["stderr"])
 ├── docs/                      # MATHEMATICAL_FOUNDATION.pdf + .tex, figures
 ├── results/                   # results.json (with provenance), RESULTS.md, tables.tex
 ├── scripts/                   # reproduce_results.py, make_tex_tables.py
-└── tests/                     # 55 pytest tests
+└── tests/                     # 62 pytest tests
 ```
 
 ## Reproducing and testing
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                                  # 55 tests
+pytest -q                                  # 62 tests
+python scripts/audit.py                    # distance-measurement audit of the shipped calibration (~20 s)
 ruff check .
 python scripts/reproduce_results.py        # every table and figure (~15 min; --fast for a smoke run)
 python scripts/make_tex_tables.py          # results.json → results/tables.tex
@@ -359,8 +416,11 @@ click → match → depth test on a ray-traced scene, and a headless run of the 
   of a few tenths of a percent would then be reachable.
 - 27 points cannot resolve model differences below about 1.5 pp; claims about the modern models rest on
   the controlled benchmark.
-- $d_x$ is only physically meaningful if the true focal length equals $f_0$ (a gauge choice); depth is
-  unaffected.
+- Lengths and X, Y need the lateral scale (a known length, key **L**, or the true focal length); depth does
+  not. $f_0$ is an exact gauge only for a parallel rig; with the rotation it is weakly identifiable, so
+  changing $f_0$ from 2500 to 3300 px shifts individual depths by ≤ 0.8 % on the real data — but held-out
+  depth accuracy does not depend on it (synthetic rig: $f_0$ off by −20 % … +38 % changes MAPE by
+  ≤ 0.04 pp; tested).
 - Extensions: bundle adjustment (use correspondences without known distance), multi-scale grids,
   dense disparity.
 

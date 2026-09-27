@@ -120,6 +120,66 @@ class StereoModel:
         """Convenience scalar version of :meth:`triangulate`."""
         return float(self.triangulate([uL], [vL], [uR], [vR])[0][0])
 
+    @property
+    def lateral_scale(self) -> float:
+        """
+        Scale k of the lateral coordinates X, Y (depth is unaffected).  Depth
+        labels determine only the product focal length × baseline, so the
+        absolute focal length — and with it X, Y and lengths — is fixed by the
+        assumed f₀.  k = f₀ / f_true corrects this; it is fitted from known
+        lengths (:meth:`fit_lateral_scale`) and is 1 until then.
+        """
+        return float(self.meta.get("lateral_scale", 1.0))
+
+    def point_3d(self, uL, vL, uR, vR) -> np.ndarray:
+        """
+        3-D point(s) ``(N, 3)`` = [X, Y, Z] in metres in the left-camera frame
+        (x right, y down, z along the optical axis): the measured depth Z placed
+        on the left ray, ``P = Z · ray_L``, lateral part scaled by ``lateral_scale``.
+        """
+        Z = self.triangulate(uL, vL, uR, vR)[0]
+        P = Z[:, None] * self.left_rays(uL, vL)
+        P[:, :2] *= self.lateral_scale
+        return P
+
+    def fit_lateral_scale(self, refs=None) -> float:
+        """
+        Fit k from reference lengths ``[[uL1, vL1, uR1, vR1, uL2, vL2, uR2, vR2, L], …]``
+        (defaults to ``meta["length_refs"]``) by least squares on
+        ``‖(k·ΔX, k·ΔY, ΔZ)‖ = L`` (Gauss–Newton, a 1-D convex-in-practice problem).
+        Stores the refs and k in ``meta`` and returns k.
+        """
+        refs = np.asarray(self.meta.get("length_refs", []) if refs is None else refs, float).reshape(-1, 9)
+        self.meta["length_refs"] = refs.tolist()
+        if len(refs) == 0:
+            self.meta.pop("lateral_scale", None)
+            return 1.0
+        self.meta["lateral_scale"] = 1.0
+        P1, P2 = self.point_3d(*refs[:, 0:4].T), self.point_3d(*refs[:, 4:8].T)
+        D = P1 - P2
+        lat2, dz2, L = D[:, 0] ** 2 + D[:, 1] ** 2, D[:, 2] ** 2, refs[:, 8]
+        use = np.isfinite(lat2) & (lat2 > 1e-6)
+        if not use.any():
+            raise ValueError("the reference lengths have no lateral component — measure across the image")
+        k = 1.0
+        for _ in range(50):
+            n = np.sqrt(k * k * lat2[use] + dz2[use])
+            r, J = n - L[use], k * lat2[use] / n
+            step = float(J @ r / (J @ J))
+            k -= step
+            if abs(step) < 1e-12:
+                break
+        self.meta["lateral_scale"] = float(k)
+        return float(k)
+
+    def range(self, uL, vL, uR, vR) -> float:
+        """
+        Straight-line (Euclidean) distance ‖P‖ from the left camera's optical
+        centre.  Differs from the depth Z off-axis: ‖P‖ = Z·‖ray_L‖ (≈ +21 %
+        in the image corners of this rig).  Calibration labels are depths.
+        """
+        return float(np.linalg.norm(self.point_3d([uL], [vL], [uR], [vR])[0]))
+
     def triangulate_gd(self, uL, vL, uR, vR, max_iter: int = 20000, tol: float = 1e-12,
                        accelerated: bool = True):
         """

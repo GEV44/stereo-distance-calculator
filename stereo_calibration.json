@@ -270,6 +270,10 @@
   "meta": {
     "trained": true,
     "n_points": 27,
+    "depth_range_m": [
+      0.41,
+      4.74
+    ],
     "final_loss": 0.0018714672348141993,
     "in_sample_mape": 0.023230282263186137,
     "in_sample_rmse_m": 0.1255858328120534,
@@ -292,6 +296,7 @@
       "3.0": 0.04476247047649373
     },
     "df_eff": 15.228421579785246,
+    "ensemble": true,
     "radial_prior": {
       "left": [
         0.2246956621111625,
@@ -338,6 +343,7 @@
       "learn_rotation": true,
       "warm_start": true,
       "ensemble": true,
+      "ensemble_min_points": 25,
       "postcorrection": false,
       "adam_betas": [
         0.9,
@@ -357,6 +363,6 @@
       "delta_1.05_pct": 74.07407407407408,
       "delta_1.10_pct": 96.29629629629629
     },
-    "saved": "2026-09-27T09:19:32"
+    "saved": "2026-09-27T10:20:15"
   }
 }

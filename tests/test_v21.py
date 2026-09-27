@@ -116,3 +116,61 @@ def test_statistics_helpers():
     assert signflip_test(a * 0.1, a * 3)["p_value"] < 0.01
     lo, hi = bootstrap_ci(rng.normal(5, 1, 400))
     assert lo < 5 < hi and hi - lo < 0.3
+
+
+# ─── audit findings ───────────────────────────────────────────────────────────
+def test_parameter_recovery_on_distortion_free_rig():
+    """With f_true = f₀ and no distortion, calibration recovers the physical rig exactly."""
+    rig = SyntheticRig(Camera(2880, 1296, 972), Camera(2880, 1296, 972), np.array([0.25, 0.003, 0.0]),
+                       np.radians([0.3, 1.2, -0.8]))
+    tr, _ = rig.sample(150, np.random.default_rng(1), click_sigma=0.0)
+    m, _ = train(tr, TrainConfig(ensemble=False), log=None)
+    assert np.allclose(m.baseline[:2], [0.25, 0.003], atol=2e-5)
+    assert np.allclose(np.degrees(m.rotation), [0.3, 1.2, -0.8], atol=2e-3)
+
+
+def test_accuracy_is_insensitive_to_the_nominal_focal_length():
+    """f₀ is not an exact gauge once the rig is rotated, but held-out accuracy barely depends on it."""
+    from stereo_gamma.config import Sensor
+
+    rig = SyntheticRig()  # true focal lengths 2750 / 2790 px
+    tr, _ = rig.sample(120, np.random.default_rng(0), click_sigma=0.3, label_sigma=0.01)
+    te, _ = rig.sample(400, np.random.default_rng(1), click_sigma=0.0)
+    mape = [metrics(train(tr, TrainConfig(auto_smooth=False), sensor=Sensor(f_init=f0), log=None)[0]
+                    .triangulate(*te[:, :4].T)[0], te[:, 4])["mape_pct"] for f0 in (2400.0, 3300.0)]
+    assert abs(mape[0] - mape[1]) < 0.1 and max(mape) < 0.5
+
+
+def test_point_3d_and_range(real_points):
+    m = StereoModel.load(__import__("os").path.join(__import__("os").path.dirname(__file__), "..",
+                                                    "stereo_calibration.json"))
+    p = real_points[4, :4]
+    P = m.point_3d(*[[c] for c in p])[0]
+    assert P[2] == pytest.approx(m.depth(*p))
+    assert m.range(*p) == pytest.approx(np.linalg.norm(P)) and m.range(*p) >= P[2]
+    # at the image corner the straight-line distance exceeds the depth by ‖ray‖
+    corner = np.linalg.norm(m.left_rays([0.0], [0.0])[0])
+    assert 1.1 < corner < 1.3
+
+
+def test_known_length_calibrates_lateral_scale():
+    """Depth labels fix only focal × baseline; a known length recovers the lateral scale."""
+    rig = SyntheticRig()  # true left focal 2750 px, model assumes f₀ = 2880 px
+    tr, _ = rig.sample(60, np.random.default_rng(0), click_sigma=0.3, label_sigma=0.01)
+    te, _ = rig.sample(300, np.random.default_rng(1), click_sigma=0.0)
+    m, _ = train(tr, TrainConfig(auto_smooth=False), log=None)
+    T = rig.left.unproject(te[:, 0], te[:, 1]) * te[:, 4:5]
+
+    def length_bias():
+        P = m.point_3d(*te[:, :4].T)
+        i, j = np.arange(0, 300, 2), np.arange(1, 300, 2)
+        lt = np.linalg.norm(T[i] - T[j], axis=1)
+        ok = lt > 0.3
+        return np.median(np.linalg.norm(P[i] - P[j], axis=1)[ok] / lt[ok] - 1)
+
+    assert length_bias() < -0.01  # lateral coordinates too small by ≈ f_true / f₀
+    refs = [[*te[k, :4], *te[k + 1, :4], np.linalg.norm(T[k] - T[k + 1])] for k in (10, 50, 90)]
+    k = m.fit_lateral_scale(refs)
+    assert k == pytest.approx(2880 / 2750, rel=0.01)
+    assert abs(length_bias()) < 0.004
+    assert m.depth(*te[0, :4]) == pytest.approx(te[0, 4], rel=0.02)  # depth unchanged

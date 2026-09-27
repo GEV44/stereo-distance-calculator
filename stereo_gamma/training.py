@@ -15,7 +15,10 @@ avoids the Z² gradient blow-up of a naive (Z_pred − Z)² loss: a 5 % error at
 
 Gauge: the problem is (almost) invariant to scaling every γ and dx by the
 same factor, so the centre node of Γ_L is frozen at the nominal pinhole value
-Γ₀ = [CX/f, CY/f].  Γ_R's centre stays free so the two cameras may differ.
+Γ₀ = [CX/f₀, CY/f₀].  Γ_R's centre stays free so the two cameras may differ.
+With a rotated rig the invariance is only approximate: f₀ shifts individual
+depths slightly (≤ 0.8 % for f₀ ∈ [2500, 3300] on the real data) but not the
+held-out accuracy (see ``tests/test_v21.py``).
 """
 
 from __future__ import annotations
@@ -428,6 +431,7 @@ def train(points, cfg: TrainConfig | None = None, sensor: Sensor = DEFAULT_SENSO
     model.meta.update({
         "trained": True,
         "n_points": int(len(pts)),
+        "depth_range_m": [float(pts5[:, 4].min()), float(pts5[:, 4].max())],
         "final_loss": float(best[0]),
         "in_sample_mape": float(np.nanmean(np.abs(rel))),
         "in_sample_rmse_m": float(np.sqrt(np.nanmean((Z_pred - pts5[:, 4]) ** 2))),

@@ -30,7 +30,7 @@ class Sensor:
     height: int = 1944
     grid_rows: int = 5
     grid_cols: int = 5
-    f_init: float = 2880.0  # nominal focal length (px) — fixes the global scale gauge
+    f_init: float = 2880.0  # nominal focal length (px) — fixes the scale of Γ (accuracy is insensitive to it)
 
     @property
     def cx(self) -> float:

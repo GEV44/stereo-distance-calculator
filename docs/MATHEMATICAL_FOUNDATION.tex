@@ -180,9 +180,16 @@ coefficients $\mathbf a$ enter only the prior, never the rays, so inference and 
 With little data $\G$ follows the two-parameter radial field; with more data it departs from it wherever the
 data demand. This is the classical parametric model used as a prior mean for a non-parametric one.
 
-\subsection{Gauge fixing}
-Scaling every $\gamma$ and $d_x$ by one factor leaves \eqref{eq:disp} (almost) unchanged, so the centre node of
-$\G_L$ is frozen at $\G_0$. $d_x$ is then the baseline expressed at $f_0$; depth is unaffected.
+\subsection{Scale gauge and its sensitivity}
+Scaling every $\gamma$ and $d_x$ by one factor leaves \eqref{eq:disp} unchanged for a parallel rig, so the centre
+node of $\G_L$ is frozen at $\G_0$ (nominal focal length $f_0$). With a rotation the invariance is only approximate
+(the perspective division mixes the scaled and unscaled components), and the priors are expressed in $\G$ units,
+so $f_0$ is weakly identifiable rather than a pure gauge. We measured the consequence: on the real data,
+refitting with $f_0\in\{2500,2880,3300\}$\,px shifts individual depths by at most $0.8\,\%$; on a simulated rig
+with true focal lengths 2750/2790\,px, choosing $f_0$ anywhere in $[2200,3800]$\,px changes the held-out MAPE by at
+most $0.04$ percentage points. Accuracy is therefore insensitive to $f_0$; $d_x$ is the physical baseline only if
+the true focal length equals $f_0$. On a distortion-free rig with $f_0$ correct, training recovers $d_x$, $d_y$ and
+all three angles exactly (tested).
 
 \subsection{Closed-form warm start}
 Linearising $R\approx I+[\bm\omega]_\times$ with nominal $\G$ gives two equations per point that are linear in
@@ -285,6 +292,36 @@ $\varepsilon$ (from the cross-validation inside training) is added in quadrature
 Out of sample, $|Z-Z_\text{true}|\le\sigma_Z$ holds for \CovOne\,\% of points (Gaussian ideal 68\,\%) and $\le2\sigma_Z$
 for \CovTwo\,\% (ideal 95\,\%), with RMS $z$-score \RmsZ. The interval is conservative at $1\sigma$ because the
 errors are heavy-tailed, and well calibrated at $2\sigma$.
+
+%=====================================================================
+\section{What is measured, and verification}
+\paragraph{Quantities.} The \emph{depth} $Z$ is the distance along the left optical axis; the calibration labels
+are depths (they fit better than straight-line ranges, 5.1\,\% vs 5.9\,\% LOOCV). The 3-D point is
+$P=Z\,\vr_L=[X,Y,Z]^\top$ and the straight-line distance from the left optical centre is $\|P\|=Z\|\vr_L\|$, which exceeds
+$Z$ by up to 21\,\% in the image corners; the app reports both, and the length $\|P_1-P_2\|$ between two measured
+points with $\sigma_\ell^2=\sum_k\big(\sigma_{Z_k}\,\mathbf u^\top P_k/Z_k\big)^2$ ($\mathbf u$ the unit segment direction).
+Depths outside $[0.8\,Z_{\min},1.25\,Z_{\max}]$ of the calibration are flagged as extrapolated.
+
+\paragraph{Lateral scale.} Depth labels identify only the product $f\,d_x$: scaling every $\gamma$ by $\alpha$ and $d_x$ by $\alpha$
+leaves all depths (and hence the whole calibration objective, up to the weak rotation coupling) unchanged, but
+multiplies $X=Z\tilde u\gamma_x$ and $Y$ by $\alpha$. The lateral coordinates are therefore fixed by the assumed $f_0$ and are
+off by $f_\text{true}/f_0$. We restore them with a lateral scale $k$ ($X,Y\mapsto kX,kY$) fitted from reference lengths
+$L_j$ between measured point pairs, $\min_k\sum_j\big(\|(k\Delta X_j,k\Delta Y_j,\Delta Z_j)\|-L_j\big)^2$ (Gauss--Newton), or
+by supplying the true focal length. On a simulated rig with $f_\text{true}=2750$\,px and $f_0=2880$\,px, lengths are
+$2\,\%$ short before and within $0.4\,\%$ after three references; depths are unchanged (tested).
+
+\paragraph{Verification.} \code{scripts/audit.py} and the test-suite check that
+(i) projecting a 3-D point into the right image and triangulating it back reproduces the depth to $7\cdot10^{-9}$
+(shipped calibration, 1953 random points, 0.3--30\,m);
+(ii) on a distortion-free simulated rig with known geometry, training recovers $d_x=0.25000$\,m, $d_y$ and all three
+angles exactly;
+(iii) the full pipeline on a ray-traced scene (click $\to$ ZNCC $\to$ left--right check $\to$ Lucas--Kanade $\to$ depth)
+is within 3\,\% of the true depth for \MatchPrec\,\% of accepted matches, and straight-line distances have a median
+error of $0.5\,\%$;
+(iv) gradients, Jacobian, the two optimisers and the two triangulation solvers agree as stated above;
+(v) no library vision, calibration or machine-learning algorithm is used: all of the geometry, optimisation,
+matching and statistics is implemented in this repository on top of NumPy linear algebra (OpenCV only reads
+images in the labelling tool, Pygame only draws the interface).
 
 %=====================================================================
 \section{Evaluation}\label{sec:eval}

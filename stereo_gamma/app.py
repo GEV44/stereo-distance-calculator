@@ -44,7 +44,10 @@ HELP = [
     "U  undo last calibration point / cancel K      G  retrain now",
     "C  clear calibration (press twice)              R  clear measurements",
     "A  toggle auto-match      V  toggle Γ-cell coverage overlay",
-    "T  swap left/right images      S  screenshot      E  export CSV",
+    "M  3-D length between the last two measurements",
+    "L  known length between the last two measurements → calibrates lateral scale",
+    "T  swap left/right images (view only — measuring is disabled while swapped)",
+    "S  screenshot      E  export CSV (pixels, X Y Z, range, σ)",
     "Wheel zoom · right-drag pan · H help · Esc quit / cancel",
 ]
 
@@ -55,9 +58,15 @@ class Measurement:
     vL: float
     uR: float
     vR: float
-    Z: float
+    Z: float  # depth along the left optical axis (m)
     sigma: float
     source: str  # "auto" | "manual"
+    P: tuple = (0.0, 0.0, 0.0)  # 3-D point in the left-camera frame (m)
+    extrapolated: bool = False  # outside the depth range covered by the calibration
+
+    @property
+    def range(self) -> float:
+        return float(np.linalg.norm(self.P))
 
 
 class App:
@@ -91,6 +100,8 @@ class App:
         self.cur_Z = self.cur_sigma = None
         self.cur_err = None
         self.auto_match, self.show_help, self.show_cov = True, False, False
+        self.swapped = False  # images swapped: the calibration no longer matches → measuring disabled
+        self.length = None  # (metres, σ) between the last two measurements
         self.clear_armed = 0.0
         self.message, self.message_t = "", 0.0
         self.zoom, self.pan = [1.0, 1.0], [[0.0, 0.0], [0.0, 0.0]]
@@ -154,12 +165,16 @@ class App:
         self.message, self.message_t = msg, time.time()
 
     def reset_current(self):
+        self.cur_extra = None
         self.cur_L = self.cur_R = self.match = None
         self.cur_Z = self.cur_sigma = self.cur_err = None
 
     def click_left(self, ix, iy):
         self.reset_current()
         self.cur_L = (ix, iy)
+        if self.swapped:
+            self.say("  images are swapped — press T to restore before measuring or calibrating")
+            return
         self.match = epipolar_match(self.model, self.grays[0], self.grays[1], ix, iy)
         if self.match is not None:
             lk = lk_refine(self.grays[0], self.grays[1], ix, iy, self.match.u, self.match.v)
@@ -174,6 +189,9 @@ class App:
             self.measure(self.match.u, self.match.v, "auto")
 
     def click_right(self, ix, iy):
+        if self.swapped:
+            self.say("  images are swapped — press T to restore before measuring or calibrating")
+            return
         if self.mode == "calib_R" and "uL" in self.pending:
             p = (self.pending["uL"], self.pending["vL"], ix, iy, self.pending["Z"])
             self.cal_pts.append(p)
@@ -190,7 +208,10 @@ class App:
     def measure(self, uR, vR, source):
         uL, vL = self.cur_L
         self.cur_R = (uR, vR)
-        Z, sigma, _ = self.model.depth_uncertainty(uL, vL, uR, vR)
+        # an automatic (ZNCC + Lucas–Kanade) match is sub-pixel; a hand click has the calibration's click noise
+        s_px = self.model.meta.get("sigma_px", 1.0)
+        s_px = min(s_px, 0.5) if source == "auto" else s_px
+        Z, sigma, _ = self.model.depth_uncertainty(uL, vL, uR, vR, sigma_px=s_px)
         if not math.isfinite(Z):
             self.cur_Z, self.cur_err = None, "no valid intersection (rays diverge / behind camera)"
             return
@@ -199,8 +220,14 @@ class App:
         if self.model.companion is not None:
             self.cur_parts = (self.model.triangulate_gamma([uL], [vL], [uR], [vR])[0][0],
                               float(self.model.companion_model().triangulate([uL], [vL], [uR], [vR])[0]))
+        P = tuple(float(c) for c in self.model.point_3d([uL], [vL], [uR], [vR])[0])
+        default = ([min(p[4] for p in self.cal_pts), max(p[4] for p in self.cal_pts)] if self.cal_pts
+                   else [0.0, float("inf")])  # older calibration files lack the field
+        lo, hi = self.model.meta.get("depth_range_m", default)
+        self.cur_extra = (float(np.linalg.norm(P)), not (0.8 * lo <= Z <= 1.25 * hi))
         if self.calibrated:
-            self.measurements.append(Measurement(uL, vL, uR, vR, Z, sigma, source))
+            self.measurements.append(Measurement(uL, vL, uR, vR, Z, sigma, source, P, self.cur_extra[1]))
+            self.length = None
             z_ols = self.model.triangulate_gamma([uL], [vL], [uR], [vR])[0][0]
             gd, it = self.model.triangulate_gd([uL], [vL], [uR], [vR], max_iter=50000)
             check = f"GD {gd[0]:.4f} m in {it} it" if it < 50000 else "GD not converged"
@@ -216,7 +243,10 @@ class App:
             return
         self.draw_banner(f"Calibrating on {len(self.cal_pts)} points (≈3 s) …")
         t0 = time.time()
+        refs = self.model.meta.get("length_refs", [])
         self.model, _ = train(np.asarray(self.cal_pts), TrainConfig(), self.sensor, log=None)
+        if refs:
+            self.model.fit_lateral_scale(refs)
         self.model.save(self.calib_path)
         self.calibrated = True
         m = self.model.meta
@@ -227,15 +257,19 @@ class App:
 
     def key(self, k, uni=""):
         pg = self.pg
-        if self.mode == "input_Z":
+        if self.mode in ("input_Z", "input_L"):
             if k in (pg.K_RETURN, pg.K_KP_ENTER):
                 try:
                     Z = float(self.typed.replace(",", "."))
                     if not (0 < Z < 1000):
                         raise ValueError
-                    self.pending = {"Z": Z}
-                    self.mode = "calib_L"
-                    self.say(f"  Z = {Z:.3f} m — click the object in the LEFT image")
+                    if self.mode == "input_L":
+                        self.mode = "measure"
+                        self.add_length_reference(Z)
+                    else:
+                        self.pending = {"Z": Z}
+                        self.mode = "calib_L"
+                        self.say(f"  Z = {Z:.3f} m — click the object in the LEFT image")
                 except ValueError:
                     self.say(f"  '{self.typed}' is not a valid distance")
                     self.mode = "measure"
@@ -254,6 +288,9 @@ class App:
                 return True
             return False
         if k == pg.K_k:
+            if self.swapped:
+                self.say("  images are swapped — press T to restore before adding calibration points")
+                return True
             self.mode, self.typed = "input_Z", ""
         elif k == pg.K_u:
             if self.mode in ("calib_L", "calib_R"):
@@ -282,7 +319,16 @@ class App:
             self.grays.reverse()
             self._cache.clear()
             self.reset_current()
-            self.say("  swapped left/right images")
+            self.swapped = not self.swapped
+            self.say("  images SWAPPED — view only: the calibration belongs to the original order, so measuring "
+                     "and calibrating are disabled (T restores)" if self.swapped else "  images restored")
+        elif k == pg.K_m:
+            self.measure_length()
+        elif k == pg.K_l:
+            if len(self.measurements) < 2 or not self.calibrated:
+                self.say("  measure the two ends of a known length first, then press L")
+            else:
+                self.mode, self.typed = "input_L", ""
         elif k == pg.K_g:
             self.retrain()
         elif k == pg.K_a:
@@ -300,12 +346,48 @@ class App:
             self.export_csv()
         return True
 
+    def measure_length(self):
+        """3-D distance between the last two measurements (e.g. an object's width)."""
+        if len(self.measurements) < 2:
+            self.say("  measure two points first, then press M")
+            return
+        a, b = self.measurements[-2], self.measurements[-1]
+        d = float(np.linalg.norm(np.subtract(a.P, b.P)))
+        # first-order propagation: P = Z·ray  ⇒  ∂P/∂Z = ray = P/Z; project on the segment direction u
+        u = np.subtract(a.P, b.P) / max(d, 1e-9)
+        s = float(np.hypot(a.sigma * np.dot(u, a.P) / a.Z, b.sigma * np.dot(u, b.P) / b.Z))
+        self.length = (d, s)
+        self.say(f"  length between the last two points: {d:.3f} m ± {s:.3f}")
+
+    def add_length_reference(self, length):
+        """Use the last two measurements as a known length → refit the lateral scale and save."""
+        a, b = self.measurements[-2], self.measurements[-1]
+        refs = list(self.model.meta.get("length_refs", []))
+        refs.append([a.uL, a.vL, a.uR, a.vR, b.uL, b.vL, b.uR, b.vR, float(length)])
+        try:
+            k = self.model.fit_lateral_scale(refs)
+        except ValueError as e:
+            self.say(f"  {e}")
+            return
+        self.model.save(self.calib_path)
+        self._refresh_points()
+        self.say(f"  lateral scale k = {k:.4f} from {len(refs)} known length(s) (≙ focal "
+                 f"{self.sensor.f_init / k:.0f} px) — saved")
+
+    def _refresh_points(self):
+        for m in self.measurements:
+            m.P = tuple(float(c) for c in self.model.point_3d([m.uL], [m.vL], [m.uR], [m.vR])[0])
+        if self.length is not None:
+            self.measure_length()
+
     def export_csv(self, path="measurements.csv"):
         with open(path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
-            w.writerow(["uL", "vL", "uR", "vR", "Z_m", "sigma_m", "source"])
+            w.writerow(["uL", "vL", "uR", "vR", "X_m", "Y_m", "Z_depth_m", "range_m", "sigma_m", "source",
+                        "extrapolated"])
             for m in self.measurements:
-                w.writerow([m.uL, m.vL, f"{m.uR:.2f}", f"{m.vR:.2f}", f"{m.Z:.4f}", f"{m.sigma:.4f}", m.source])
+                w.writerow([m.uL, m.vL, f"{m.uR:.2f}", f"{m.vR:.2f}", f"{m.P[0]:.4f}", f"{m.P[1]:.4f}",
+                            f"{m.Z:.4f}", f"{m.range:.4f}", f"{m.sigma:.4f}", m.source, int(m.extrapolated)])
         self.say(f"  exported {len(self.measurements)} measurements → {path}")
 
     # ── event loop ───────────────────────────────────────────────────────────
@@ -332,7 +414,7 @@ class App:
                 return True
             if ev.button == 3:
                 self.drag[p], self.drag0, self.drag_pan[p] = True, (mx, my), list(self.pan[p])
-            elif ev.button == 1 and self.mode != "input_Z":
+            elif ev.button == 1 and self.mode not in ("input_Z", "input_L"):
                 ix, iy = (int(round(c)) for c in self.to_img(mx, my, p))
                 if 0 <= ix < self.sensor.width and 0 <= iy < self.sensor.height:
                     (self.click_left if p == 0 else self.click_right)(ix, iy)
@@ -470,16 +552,24 @@ class App:
         pg, scr = self.pg, self.screen
         scr.fill(HUD_BG, pg.Rect(0, DISP_H, self.W, HUD_H))
         y = DISP_H + 8
-        if self.cur_Z is not None:
-            txt = f"Z = {self.cur_Z:.3f} m  ± {self.cur_sigma:.3f}"
-            if getattr(self, "cur_parts", None):
-                txt += f"      (Γ grid {self.cur_parts[0]:.3f} · Brown–Conrady {self.cur_parts[1]:.3f})"
-            scr.blit(self.big.render(txt, True, C_OK), (10, y))
+        if self.swapped:
+            scr.blit(self.big.render("IMAGES SWAPPED — view only (press T to restore)", True, C_BAD), (10, y))
+        elif self.cur_Z is not None:
+            txt = f"depth Z = {self.cur_Z:.3f} m ± {self.cur_sigma:.3f}"
+            if not self.calibrated:
+                txt = "UNCALIBRATED estimate: " + txt
+            if self.cur_extra:
+                txt += f"   ·   straight-line {self.cur_extra[0]:.3f} m"
+                if self.cur_extra[1]:
+                    txt += "   ·   EXTRAPOLATED (outside calibrated depths)"
+            if self.length:
+                txt += f"   ·   length {self.length[0]:.3f} m ± {self.length[1]:.3f}"
+            scr.blit(self.big.render(txt, True, C_BAD if self.cur_extra and self.cur_extra[1] else C_OK), (10, y))
         elif self.cur_err:
             scr.blit(self.big.render(self.cur_err, True, C_BAD), (10, y))
-        elif self.mode == "input_Z":
-            scr.blit(self.big.render(f"True distance (m): {self.typed}_   [Enter/Esc]", True, (255, 220, 120)),
-                     (10, y))
+        elif self.mode in ("input_Z", "input_L"):
+            what = "True distance (m)" if self.mode == "input_Z" else "True length between the last two points (m)"
+            scr.blit(self.big.render(f"{what}: {self.typed}_   [Enter/Esc]", True, (255, 220, 120)), (10, y))
         else:
             scr.blit(self.big.render("Click a point in the left image", True, C_DIM), (10, y))
         y += 30
@@ -498,6 +588,8 @@ class App:
         if self.match:
             info.append(f"match ZNCC={self.match.score:.2f} uniq={self.match.uniqueness:.2f}"
                         f"{'' if self.match.reliable else ' (unreliable — click right image)'}")
+        if getattr(self, "cur_parts", None) and self.cur_Z is not None:
+            info.append(f"members: Γ {self.cur_parts[0]:.3f} · Brown–Conrady {self.cur_parts[1]:.3f} m")
         info.append(f"{len(self.measurements)} measurements")
         lines.append("   ".join(info))
         if self.mode == "calib_L":
@@ -506,8 +598,8 @@ class App:
             lines.append(f"CALIBRATION  Z={self.pending['Z']:.3f} m → click the same object in the RIGHT image")
         elif self.message and time.time() - self.message_t < 6:
             lines.append(self.message.strip())
-        lines.append("K add-cal · U undo · G train · C clear · R clear-meas · A auto · V coverage · "
-                     "T swap · S shot · E csv · H help · Esc quit")
+        lines.append("K add-cal · U undo · G train · C clear · R clear-meas · M length · L known length · "
+                     "A auto · V coverage · T swap · S shot · E csv · H help · Esc quit")
         for i, line in enumerate(lines):
             scr.blit(self.font.render(line, True, C_TEXT if i < len(lines) - 1 else C_DIM), (10, y + 18 * i))
 

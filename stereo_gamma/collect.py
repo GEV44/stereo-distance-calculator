@@ -66,6 +66,12 @@ class Collector:
             sys.exit(f"ERROR: cannot read {lp if left is None else rp}")
         if left.shape != right.shape:
             print(f"[warn] {lp} and {rp} have different sizes")
+        from .config import DEFAULT_SENSOR
+
+        if left.shape[1::-1] != (DEFAULT_SENSOR.width, DEFAULT_SENSOR.height):
+            print(f"[warn] {lp} is {left.shape[1]}×{left.shape[0]}, the model expects "
+                  f"{DEFAULT_SENSOR.width}×{DEFAULT_SENSOR.height}: clicks are stored in this image's pixels, "
+                  "so calibrate and measure with images of one resolution")
         h, w = left.shape[:2]
         self.scale = min(DISP_W / w, DISP_H / h)
         size = (int(w * self.scale), int(h * self.scale))

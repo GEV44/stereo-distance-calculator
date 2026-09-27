@@ -36,14 +36,26 @@ def cmd_train(a):
     if len(pts) < 3:
         sys.exit(f"{a.points}: need at least 3 points, found {len(pts)}")
     cfg = TrainConfig(epochs=a.epochs, log_every=0 if a.quiet else max(1, a.epochs // 10))
-    print(f"[train] {len(pts)} points from {a.points}")
-    model, _ = train(pts, cfg)
+    from .config import Sensor
+
+    sensor = Sensor() if a.focal_px is None else Sensor(f_init=a.focal_px)
+    print(f"[train] {len(pts)} points from {a.points}  (f0 = {sensor.f_init:.0f} px)")
+    model, _ = train(pts, cfg, sensor)
+    if os.path.exists(a.out):  # keep known-length references from the previous calibration
+        try:
+            from .model import StereoModel
+
+            refs = StereoModel.load(a.out).meta.get("length_refs", [])
+            if refs:
+                print(f"[train] lateral scale k = {model.fit_lateral_scale(refs):.4f} from {len(refs)} known length(s)")
+        except (ValueError, KeyError):
+            pass
     d, w = model.baseline, np.degrees(model.rotation)
     print(f"[train] dx={d[0]:.4f}  dy={d[1]:+.4f}  pitch={w[0]:+.3f}°  yaw={w[1]:+.3f}°  roll={w[2]:+.3f}°")
     _print_metrics("[train] in-sample", metrics(model.triangulate(*pts[:, :4].T)[0], pts[:, 4]))
     if a.cv:
         print(f"[train] nested leave-one-out cross-validation ({len(pts)} full trainings, ~2 min) …")
-        z_cv = loocv(pts, cfg)
+        z_cv = loocv(pts, cfg, sensor)
         m = metrics(z_cv, pts[:, 4])
         _print_metrics("[train] LOOCV    ", m)
         model.meta["loocv"] = m
@@ -125,6 +137,9 @@ def main(argv=None):
     s.add_argument("--out", default="stereo_calibration.json")
     s.add_argument("--epochs", type=int, default=TrainConfig.epochs)
     s.add_argument("--cv", action="store_true", help="also run leave-one-out cross-validation")
+    s.add_argument("--focal-px", type=float, default=None,
+                   help="true focal length in pixels (focal mm / pixel pitch mm) if known — sets the lateral "
+                        "scale (X, Y, lengths); depth does not depend on it")
     s.add_argument("--quiet", action="store_true")
     s.set_defaults(func=cmd_train)
 

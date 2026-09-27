@@ -35,6 +35,8 @@ jobs:
           cache: pip
       - run: pip install numpy pygame matplotlib pytest
       - run: pytest -q
+      - name: Distance-measurement audit
+        run: python scripts/audit.py
       - name: CLI smoke test
         run: |
           python -m stereo_gamma --version
