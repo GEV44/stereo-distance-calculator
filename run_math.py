@@ -452,10 +452,11 @@ def run(left_path, right_path):
             # Up-sample 4×4 grid to 5×5 if an old calibration was loaded
             if GammaL.shape != (GRID_ROWS, GRID_COLS):
                 from scipy.ndimage import zoom as _zoom
+                old_shape = GammaL.shape
                 scale = GRID_ROWS / GammaL.shape[0]
                 GammaL = _zoom(GammaL, scale);  GammaR = _zoom(GammaR, scale)
                 GammaL[2,2] = GammaR[2,2] = G0_INIT   # re-anchor after resize
-                print(f"[INIT] up-sampled old {GammaL.shape} grid to 5×5")
+                print(f"[INIT] up-sampled old {old_shape} grid to 5×5")
             calibrated = True
             print(f"[INIT] loaded {CALIB_PATH}  dx={d[0]:.4f}m")
         except Exception as e:
