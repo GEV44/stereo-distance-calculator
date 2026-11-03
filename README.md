@@ -52,6 +52,7 @@ See the PDF for equations, the gradient chain rule, and the function-to-math map
 ├── docs/
 │   └── MATHEMATICAL_FOUNDATION.pdf
 ├── left/  right/            # Place stereo image pairs here (for collect_points.py)
+├── tests/                   # pytest suite for the math core (no display needed)
 ├── requirements.txt
 └── README.md
 ```
@@ -89,6 +90,20 @@ python collect_points.py
 ```
 
 Exports `training_data.json` with `(left_pt, right_pt, distance)` entries.
+
+### 3. Run the tests
+
+```bash
+pip install pytest
+python -m pytest -q
+```
+
+The suite runs headless in under a second and runs in CI on every push. It checks that:
+
+- the shipped calibration reproduces the 27 measured distances in `cal_pts.json` (mean error under 0.15 m);
+- every analytic gradient in `forward_grads` matches a central finite difference;
+- `predict_right` and `triangulate` invert each other;
+- the bilinear grid, the Laplacian smoothness term and calibration save/load behave as specified.
 
 ---
 
