@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 470" width="1180" height="470" role="img" aria-label="Stereo distance pipeline">
+<title>Stereo distance pipeline: Γ-grid ray model, ZNCC hint, OLS triangulation</title>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/></marker>
+<style>text{font-family:Inter,'Segoe UI',Helvetica,Arial,sans-serif}.t{fill:#e6edf3;font-size:16px;font-weight:600}.s{fill:#8b949e;font-size:13px}.l{fill:#8b949e;font-size:12px}.h{fill:#e6edf3;font-size:20px;font-weight:700}.c{fill:#8b949e;font-size:12.5px;font-family:'JetBrains Mono',Consolas,monospace}</style></defs>
+<rect width="1180" height="470" rx="18" fill="#0d1117"/>
+<text x="32" y="44" class="h">run_math.py: from two clicks to metres</text>
+<text x="32" y="68" class="s">Measurement path (solid) and offline calibration path (dashed). Pure NumPy + Pygame.</text>
+<rect x="32" y="100" width="200" height="130" rx="12" fill="#161b22" stroke="#58a6ff" stroke-width="1.6"/>
+<rect x="32" y="114" width="4" height="102" rx="2" fill="#58a6ff"/>
+<text x="50" y="130" class="t">Stereo pair</text>
+<text x="50" y="154" class="s">left + right image</text>
+<text x="50" y="174" class="s">2592 × 1944 px</text>
+<text x="50" y="194" class="s">CLAHE grayscale copy</text>
+<rect x="282" y="100" width="236" height="130" rx="12" fill="#161b22" stroke="#d2a8ff" stroke-width="1.6"/>
+<rect x="282" y="114" width="4" height="102" rx="2" fill="#d2a8ff"/>
+<text x="300" y="130" class="t">Γ-grid ray model</text>
+<text x="300" y="154" class="s">ray = [u_n·Γ, v_n·Γ, 1]</text>
+<text x="300" y="174" class="s">Γ: 5×5 bilinear grid</text>
+<text x="300" y="194" class="s">per camera</text>
+<rect x="568" y="100" width="250" height="130" rx="12" fill="#161b22" stroke="#3fb950" stroke-width="1.6"/>
+<rect x="568" y="114" width="4" height="102" rx="2" fill="#3fb950"/>
+<text x="586" y="130" class="t">Right-image guidance</text>
+<text x="586" y="154" class="s">epipolar curve + 1/2/5 m rings</text>
+<text x="586" y="174" class="s">ZNCC row search → hint (+)</text>
+<text x="586" y="194" class="s">user clicks the match</text>
+<rect x="868" y="100" width="280" height="130" rx="12" fill="#161b22" stroke="#ffa657" stroke-width="1.6"/>
+<rect x="868" y="114" width="4" height="102" rx="2" fill="#ffa657"/>
+<text x="886" y="130" class="t">OLS triangulation</text>
+<text x="886" y="154" class="s">A = [v_L, −v_R],  A x = d</text>
+<text x="886" y="174" class="s">x = (AᵀA)⁻¹ Aᵀ d,  Z = x₀</text>
+<text x="886" y="194" class="s">→ depth Z in metres</text>
+<path d="M232,165 L280,165" stroke="#8b949e" stroke-width="1.8" fill="none" marker-end="url(#a)"/>
+<path d="M518,165 L566,165" stroke="#8b949e" stroke-width="1.8" fill="none" marker-end="url(#a)"/>
+<path d="M818,165 L866,165" stroke="#8b949e" stroke-width="1.8" fill="none" marker-end="url(#a)"/>
+<rect x="568" y="268" width="250" height="92" rx="12" fill="#161b22" stroke="#8b949e" stroke-width="1.6" stroke-dasharray="6 5"/>
+<rect x="568" y="282" width="4" height="64" rx="2" fill="#8b949e"/>
+<text x="586" y="298" class="t">Sub-pixel refinement</text>
+<text x="586" y="322" class="s">SSD parabola + Lucas–Kanade</text>
+<text x="586" y="342" class="s">printed, info only</text>
+<path d="M693,230 L693,266" stroke="#8b949e" stroke-width="1.8" fill="none" marker-end="url(#a)" stroke-dasharray="5 5"/>
+<rect x="32" y="330" width="200" height="108" rx="12" fill="#161b22" stroke="#58a6ff" stroke-width="1.6" stroke-dasharray="6 5"/>
+<rect x="32" y="344" width="4" height="80" rx="2" fill="#58a6ff"/>
+<text x="50" y="360" class="t">Calibration points</text>
+<text x="50" y="384" class="s">≥ 15 clicks with a</text>
+<text x="50" y="404" class="s">measured distance</text>
+<rect x="282" y="330" width="236" height="108" rx="12" fill="#161b22" stroke="#d2a8ff" stroke-width="1.6" stroke-dasharray="6 5"/>
+<rect x="282" y="344" width="4" height="80" rx="2" fill="#d2a8ff"/>
+<text x="300" y="360" class="t">train()</text>
+<text x="300" y="384" class="s">batch gradient descent,</text>
+<text x="300" y="404" class="s">analytic gradients</text>
+<path d="M232,384 L280,384" stroke="#8b949e" stroke-width="1.8" fill="none" marker-end="url(#a)" stroke-dasharray="5 5"/>
+<path d="M400,328 L400,232" stroke="#8b949e" stroke-width="1.8" fill="none" marker-end="url(#a)" stroke-dasharray="5 5"/><text x="410" y="284.0" class="l">fits Γ_L, Γ_R, dx, dy</text>
+<rect x="868" y="268" width="280" height="170" rx="12" fill="#161b22" stroke="#8b949e" stroke-width="1.6" stroke-dasharray="6 5"/>
+<rect x="868" y="282" width="4" height="142" rx="2" fill="#8b949e"/>
+<text x="886" y="298" class="t">Loss (per point)</text>
+<text x="886" y="322" class="s">e_x = (v_Lx − v_Rx)·Z / dx − 1</text>
+<text x="886" y="342" class="s">e_y = (v_Ly − v_Ry) − dy / Z</text>
+<text x="886" y="362" class="s">+ Laplacian smoothness on Γ</text>
+<text x="886" y="382" class="s">centre node frozen as scale</text>
+<text x="886" y="402" class="s">anchor; 9,000 epochs</text>
+<path d="M518,384 L866,384" stroke="#8b949e" stroke-width="1.8" fill="none" marker-end="url(#a)" stroke-dasharray="5 5"/><text x="692.0" y="376.0" class="l" text-anchor="middle">minimises</text>
+</svg>

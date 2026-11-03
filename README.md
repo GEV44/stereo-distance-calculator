@@ -7,6 +7,14 @@
 
 Built for a dual-camera rig (2592×1944 px). The full mathematical derivation is in [`docs/MATHEMATICAL_FOUNDATION.pdf`](docs/MATHEMATICAL_FOUNDATION.pdf).
 
+<p align="center">
+  <img src="docs/media/demo.gif" width="960" alt="The run_math.py measurement UI: a click in the left image, the epipolar curve and 1/2/5 m rings in the right image, a click on the match, and the triangulated depth compared with ground truth">
+  <br>
+  <sub>The real <code>run_math.py</code> UI, driven headlessly by <a href="scripts/make_media.py"><code>scripts/make_media.py</code></a>, on a <b>synthetic scene</b>:
+  textured boxes and a wall at known depths, ray-traced through the shipped calibration (the repo contains no real camera photos).
+  The bottom bar compares the UI's depth with the scene's ground truth. <a href="docs/media/demo.mp4">MP4 version</a>.</sub>
+</p>
+
 ---
 
 ## Highlights
@@ -23,13 +31,9 @@ Built for a dual-camera rig (2592×1944 px). The full mathematical derivation is
 
 ## How it works (pipeline)
 
-```mermaid
-flowchart LR
-    A[Click left image] --> B[Ray from Γ grid]
-    B --> C[Epipolar curve + ZNCC hint in right image]
-    C --> D[Click matching right point]
-    D --> E[OLS triangulation → Z]
-```
+<p align="center">
+  <img src="docs/media/pipeline.svg" width="900" alt="Pipeline: stereo pair, Γ-grid ray model, right-image guidance (epipolar curve, ZNCC hint, user click), OLS triangulation; calibration points train the Γ grids offline">
+</p>
 
 1. **Normalized coordinates** — \(u_n = (u - C_X)/C_X\), \(v_n = (v - C_Y)/C_Y\) for stable optimization.
 2. **Ray** — \(\mathbf{v} = [u_n \gamma_x,\; v_n \gamma_y,\; 1]^\top\) with \(\gamma\) from bilinear interpolation on the grid.
@@ -37,6 +41,38 @@ flowchart LR
 4. **Loss** — Relative disparity \(e_x = (v_{Lx} - v_{Rx}) / (d_x / Z_{\text{true}}) - 1\) avoids \(Z^2\) gradient blow-up at large distances; epipolar \(e_y\) aligns vertical rays with baseline \(d_y\).
 
 See the PDF for equations, the gradient chain rule, and the function-to-math mapping (`bilinear`, `build_ray`, `triangulate`, `forward_grads`, `train`, etc.). The PDF also derives extensions (Huber loss, Adam, an anchor prior, a local fundamental matrix and quadratic post-correction) that the current `run_math.py` does not implement: it uses a squared loss, plain batch gradient descent and a frozen centre node.
+
+---
+
+## Results
+
+All numbers below come from the data shipped in this repo: the 27 real calibration points in `cal_pts.json` (pixel coordinates in both images plus the measured distance) and the learned `stereo_calibration.json`, evaluated with `run_math.triangulate`.
+
+<p align="center"><img src="docs/media/accuracy.png" width="900" alt="Predicted vs measured distance for the 27 real points, with a residual panel"></p>
+
+On the 27 real points the shipped calibration has a **mean absolute error of 0.095 m** (median 5.5 cm, RMSE 0.15 m, mean relative error 3.5 %). The **worst point is off by 0.59 m** (4.05 m measured, 3.46 m predicted); only two points are off by more than 0.2 m. Read these as fit error, not as held-out accuracy: `cal_pts.json` is the point set that `train()` fits, and the repo has no separate test set. For a held-out estimate, `python scripts/make_media.py loo` retrains from scratch 27 times, each time leaving one point out, and measures the left-out point: **held-out MAE 0.32 m** (median 0.16 m, worst 2.6 m). That is about three times the fit error. With roughly 50 free parameters and 27 points the grids overfit, so more calibration points, especially near the image borders, are the main way to improve accuracy. (Retraining does not reproduce the shipped calibration exactly: a fresh fit on all 27 points lands at dx = 26.1 cm instead of 27.4 cm, with a similar 0.093 m fit MAE.)
+
+<p align="center"><img src="docs/media/lens-grids.png" width="900" alt="Heatmaps of the learned 5x5 Γ grids for the left and right cameras with node values"></p>
+
+The lens model is two 5×5 grids of Γ, the inverse focal scale, one per camera, bilinearly interpolated between nodes. The centre node is frozen at 0.45 (a 2880 px focal length) to fix the overall scale. The learned values range from about 0.41 to 0.62, so the effective focal length varies by tens of percent across the image. Edge nodes that no calibration click touches stay at their initial 0.45, because the Laplacian smoothness term only acts on interior nodes. More points near the image borders would constrain them.
+
+<p align="center"><img src="docs/media/depth-curve.png" width="820" alt="Depth versus disparity curves from the shipped calibration with the 27 real points overlaid"></p>
+
+Depth is roughly proportional to 1/disparity, with f·dx ≈ 790 px·m for this rig. A one-pixel click error costs about 0.3 mm at 0.5 m but about 3 cm at 5 m, so zooming in with the mouse wheel before clicking the match matters most for far points.
+
+The media are reproducible with `pip install matplotlib && python scripts/make_media.py` (`pdftoppm` and `ffmpeg` are needed for the PDF previews and the video).
+
+---
+
+## Math
+
+The derivation lives in [`docs/MATHEMATICAL_FOUNDATION.pdf`](docs/MATHEMATICAL_FOUNDATION.pdf) (9 pages): normalized coordinates and the ray equation, bilinear Γ interpolation, stereo triangulation by least squares, the disparity relation, the loss and its analytic gradients, plus the extensions noted above that the code does not implement.
+
+<p align="center">
+  <a href="docs/MATHEMATICAL_FOUNDATION.pdf"><img src="docs/media/math-p1.png" width="270" alt="PDF page 1: normalized coordinates, ray equation, bilinear interpolation"></a>
+  <a href="docs/MATHEMATICAL_FOUNDATION.pdf"><img src="docs/media/math-p2.png" width="270" alt="PDF page 2: stereo geometry, OLS triangulation, disparity"></a>
+  <a href="docs/MATHEMATICAL_FOUNDATION.pdf"><img src="docs/media/math-p3.png" width="270" alt="PDF page 3: loss derivation, Huber loss"></a>
+</p>
 
 ---
 
@@ -50,7 +86,10 @@ See the PDF for equations, the gradient chain rule, and the function-to-math map
 ├── data/
 │   └── sample_training_pairs.json
 ├── docs/
-│   └── MATHEMATICAL_FOUNDATION.pdf
+│   ├── MATHEMATICAL_FOUNDATION.pdf
+│   └── media/               # README / portfolio figures and demo video
+├── scripts/
+│   └── make_media.py        # Regenerates docs/media (plots, PDF previews, demo)
 ├── left/  right/            # Place stereo image pairs here (for collect_points.py)
 ├── tests/                   # pytest suite for the math core (no display needed)
 ├── requirements.txt
