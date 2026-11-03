@@ -10,6 +10,7 @@ RIGHT_DIR  = "right"
 SAVE_FILE  = "training_data.json"
 DISP_W     = 800    # display width per panel (px); clicks are scaled back to full res
 DISP_H     = 600    # display height per panel (px)
+IMG_EXTS   = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
 
 # ── STATE ───────────────────────────────────────────────────────────
 class State:
@@ -25,7 +26,7 @@ class State:
     pairs = []           # list of (left_path, right_path)
     scale = 1.0
 
-WINDOW = "Click Points  |  LEFT ←  → RIGHT  |  Q=quit  N=next pair  D=done with this image"
+WINDOW = "Click Points  |  LEFT ←  → RIGHT  |  Q=quit  N=next pair  P=prev pair  U=undo"
 
 def load_existing_data():
     if os.path.exists(SAVE_FILE):
@@ -43,8 +44,9 @@ def save_data(data):
 
 def build_pairs():
     """Match left/right images by sorted order or common name fragments."""
-    left_files  = sorted(os.listdir(LEFT_DIR))
-    right_files = sorted(os.listdir(RIGHT_DIR))
+    # Only image files: the folders also hold README.md / .gitkeep placeholders.
+    left_files  = sorted(f for f in os.listdir(LEFT_DIR) if f.lower().endswith(IMG_EXTS))
+    right_files = sorted(f for f in os.listdir(RIGHT_DIR) if f.lower().endswith(IMG_EXTS))
 
     # Try matching by replacing left/right in filenames
     pairs = []

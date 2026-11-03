@@ -14,11 +14,10 @@ Built for a dual-camera rig (2592×1944 px). The full mathematical derivation is
 | Aspect | Detail |
 |--------|--------|
 | **Model** | Per-camera 5×5 **Γ (gamma) grid** with bilinear interpolation — encodes lens distortion and effective focal length without polynomial distortion models |
-| **Optimization** | Analytical gradients + **Adam** + Huber loss (δ = 5%) + Laplacian smoothness + anchor prior |
-| **Matching** | Local fundamental matrix, **1D ZNCC** along epipolar line, parabolic sub-pixel refinement |
+| **Optimization** | Analytical gradients + batch **gradient descent** (gradient clipping) + Laplacian smoothness; centre node frozen as scale anchor |
+| **Matching** | **ZNCC** search along the clicked row as a visual hint; SSD parabolic sub-pixel and Lucas–Kanade refinement reported for information |
 | **Triangulation** | OLS ray intersection: \(x = (A^\top A)^{-1} A^\top d\) |
-| **Post-correction** | Quadratic polynomial \(Z_{\text{true}} = a + b Z_{\text{pred}} + c Z_{\text{pred}}^2\) |
-| **Runtime** | Training ~10⁶ ops in **< 1 s** on CPU; inference O(1) per click |
+| **Runtime** | Training (9,000 epochs) in pure Python on CPU, roughly 1–2 min for ~30 points; inference O(1) per click |
 
 ---
 
@@ -27,10 +26,9 @@ Built for a dual-camera rig (2592×1944 px). The full mathematical derivation is
 ```mermaid
 flowchart LR
     A[Click left image] --> B[Ray from Γ grid]
-    B --> C[Epipolar line in right image]
-    C --> D[1D ZNCC search]
+    B --> C[Epipolar curve + ZNCC hint in right image]
+    C --> D[Click matching right point]
     D --> E[OLS triangulation → Z]
-    E --> F[Polynomial correction]
 ```
 
 1. **Normalized coordinates** — \(u_n = (u - C_X)/C_X\), \(v_n = (v - C_Y)/C_Y\) for stable optimization.
@@ -38,7 +36,7 @@ flowchart LR
 3. **Stereo geometry** — \(Z \mathbf{v}_L - Z_R \mathbf{v}_R = \mathbf{d}\); solved by least squares when rays do not meet exactly.
 4. **Loss** — Relative disparity \(e_x = (v_{Lx} - v_{Rx}) / (d_x / Z_{\text{true}}) - 1\) avoids \(Z^2\) gradient blow-up at large distances; epipolar \(e_y\) aligns vertical rays with baseline \(d_y\).
 
-See the PDF for equations, gradient chain rule, Adam update, and function-to-math mapping (`bilinear`, `build_ray`, `triangulate`, `forward_grads`, `train`, etc.).
+See the PDF for equations, the gradient chain rule, and the function-to-math mapping (`bilinear`, `build_ray`, `triangulate`, `forward_grads`, `train`, etc.). The PDF also derives extensions (Huber loss, Adam, an anchor prior, a local fundamental matrix and quadratic post-correction) that the current `run_math.py` does not implement: it uses a squared loss, plain batch gradient descent and a frozen centre node.
 
 ---
 
@@ -57,8 +55,6 @@ See the PDF for equations, gradient chain rule, Adam update, and function-to-mat
 ├── requirements.txt
 └── README.md
 ```
-
-**Removed from the working tree (not needed in repo):** IDE settings (`.claude/`), duplicate dataset `training_data32.json`.
 
 ---
 
@@ -123,7 +119,7 @@ The right panel shows the **epipolar curve**, **ZNCC hint** (green cross), and d
 | \(f_{\text{init}}\) | 2880 px | Nominal focal length |
 | \(d_x\) min | 0.02 m | Baseline floor |
 | Γ clamp | [0.05, 5.0] | Physical focal-scale bounds |
-| Huber δ | 0.05 | 5% relative error threshold |
+| Smoothness weight | 1e-2 | Laplacian penalty on inner Γ nodes |
 | Min cal points | 15 | Before auto-train |
 
 ---
