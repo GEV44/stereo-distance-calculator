@@ -50,3 +50,13 @@ right/*
 # Uncomment to ignore local calibration; default keeps shipped example.
 # stereo_calibration.json
 # cal_pts.json
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# collect_points.py output (your own labelled clicks)
+training_data.json
