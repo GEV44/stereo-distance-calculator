@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stereo-distance"
+version = "1.0.0"
+description = "Pure-NumPy stereo distance measurement: 5x5 gamma lens grid, analytic-gradient calibration, ZNCC matching, OLS triangulation"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Gevorg Hovhannisyan" }]
+requires-python = ">=3.10"
+keywords = ["stereo-vision", "computer-vision", "triangulation", "camera-calibration", "numpy", "depth-estimation"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Image Recognition",
+]
+dependencies = ["numpy>=1.24,<3"]
+
+[project.optional-dependencies]
+ui = ["pygame>=2.5"]
+collect = ["opencv-python>=4.8"]
+images = ["pillow>=10"]
+bench = ["matplotlib>=3.7"]
+dev = ["pytest>=8", "ruff>=0.5", "pillow>=10", "matplotlib>=3.7"]
+
+[project.scripts]
+stereo-distance = "stereo_distance.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/GEV44/stereo-distance-calculator"
+Documentation = "https://github.com/GEV44/stereo-distance-calculator/blob/main/docs/MATHEMATICAL_FOUNDATION.pdf"
+Issues = "https://github.com/GEV44/stereo-distance-calculator/issues"
+
+[tool.setuptools]
+packages = ["stereo_distance"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["collect_points.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "N"]
+ignore = ["N803", "N806", "B905"]
+
+[tool.ruff.lint.per-file-ignores]
+"run_math.py" = ["E402", "F401"]
+"tests/*" = ["N802"]
