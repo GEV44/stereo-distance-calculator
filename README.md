@@ -42,11 +42,68 @@ See the PDF for equations, gradient chain rule, Adam update, and function-to-mat
 
 ---
 
+## Results
+
+Leave-one-out evaluation on the 27 calibration points in `cal_pts.json` (0.41–4.74 m): for each point the model is trained on the other 26 with the default settings, then the held-out point is triangulated from its labelled left/right pixels.
+
+| Metric | Value |
+|---|---|
+| Median distance error | **6.0%** |
+| Points within 10% | 18 / 27 |
+| Points within 5% | 11 / 27 |
+| Mean distance error | 10.1% (two outliers: 31% and 77%) |
+| In-sample error (all 27 points) | 3.0% |
+
+The gap between in-sample (3%) and held-out (6% median) error is the honest generalisation cost of a 52-parameter model fitted on 27 points. The two large outliers (true 3.35 m and 4.05 m) are the first calibration samples to re-check. This test covers the geometric model only; automatic ZNCC matching adds its own error on top.
+
+Reproduce with:
+
+```bash
+python eval_loocv.py            # ~25 min on one CPU core (27 trainings × 9000 epochs)
+```
+
+<details><summary>Per-point results</summary>
+
+| True distance (m) | Predicted (m) | Error |
+|---:|---:|---:|
+| 0.41 | 0.47 | 14.0% |
+| 0.72 | 0.81 | 12.7% |
+| 1.35 | 1.35 | 0.4% |
+| 1.64 | 1.63 | 0.8% |
+| 1.64 | 1.69 | 3.3% |
+| 1.90 | 1.88 | 1.3% |
+| 2.02 | 1.97 | 2.3% |
+| 2.17 | 1.99 | 8.1% |
+| 2.25 | 2.01 | 10.8% |
+| 2.35 | 2.23 | 4.9% |
+| 2.50 | 2.43 | 2.8% |
+| 2.52 | 2.74 | 8.6% |
+| 2.55 | 2.53 | 0.8% |
+| 2.60 | 2.45 | 5.6% |
+| 2.95 | 3.12 | 5.8% |
+| 3.11 | 3.38 | 8.7% |
+| 3.33 | 2.99 | 10.2% |
+| 3.35 | 5.94 | 77.2% |
+| 3.40 | 3.46 | 1.9% |
+| 3.45 | 3.24 | 6.1% |
+| 3.76 | 3.68 | 2.2% |
+| 3.96 | 3.56 | 10.1% |
+| 4.05 | 2.79 | 31.1% |
+| 4.30 | 4.04 | 6.0% |
+| 4.45 | 4.61 | 3.5% |
+| 4.54 | 3.78 | 16.8% |
+| 4.74 | 3.98 | 16.1% |
+
+</details>
+
+---
+
 ## Repository layout
 
 ```
 ├── run_math.py              # Main app: calibration, matching, measurement UI
 ├── collect_points.py        # Batch tool to label left/right pairs + distances
+├── eval_loocv.py            # Leave-one-out accuracy evaluation
 ├── stereo_calibration.json  # Pre-trained Γ grids + baseline (example)
 ├── cal_pts.json             # Calibration point cache
 ├── data/

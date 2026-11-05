@@ -15,5 +15,5 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - run: python -m py_compile run_math.py collect_points.py
+      - run: python -m py_compile run_math.py collect_points.py eval_loocv.py
       - run: python -c "import json; json.load(open('stereo_calibration.json')); json.load(open('cal_pts.json'))"
