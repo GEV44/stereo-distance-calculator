@@ -6,14 +6,48 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
-    runs-on: ubuntu-latest
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - run: pip install -r requirements.txt
-      - run: python -m py_compile run_math.py collect_points.py eval_loocv.py
-      - run: python -c "import json; json.load(open('stereo_calibration.json')); json.load(open('cal_pts.json'))"
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: python -m ruff check .
+
+      - name: Tests (pytest)
+        run: python -m pytest -q
+
+      - name: CLI smoke
+        run: |
+          python -m stereo_distance --help
+          python -m stereo_distance info --calib stereo_calibration.json --points cal_pts.json
+          python -m stereo_distance measure 2480 1086 2171 1130 --calib stereo_calibration.json
+
+      - name: Benchmark smoke (quick, synthetic only)
+        if: runner.os == 'Linux'
+        run: python benchmarks/synthetic_eval.py --quick --no-real
