@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 380" width="960" height="380" role="img" aria-labelledby="t d">
+  <title id="t">Two cameras triangulating a point, 6.0 % median error</title>
+  <desc id="d">Left and right camera rays meet at a target point P. Depth Z is found by least-squares ray intersection. Held-out median relative error on the real rig is 6.0 percent.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="1" stop-color="#1e293b"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #e2e8f0; }
+      .mut { fill: #94a3b8; font-size: 14px; }
+      .lab { font-size: 16px; font-weight: 600; }
+    </style>
+  </defs>
+  <rect width="960" height="380" rx="16" fill="url(#bg)"/>
+
+  <!-- title -->
+  <text x="36" y="46" font-size="22" font-weight="700">Distance from two ordinary cameras</text>
+  <text x="36" y="70" class="mut">Pure NumPy: learned 5×5 lens grid, ZNCC matching, least-squares ray intersection</text>
+
+  <!-- depth guide -->
+  <line x1="300" y1="130" x2="300" y2="300" stroke="#475569" stroke-width="1.5" stroke-dasharray="5 5"/>
+  <line x1="300" y1="140" x2="300" y2="290" stroke="#94a3b8" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="312" y="222" class="lab">Z</text>
+  <text x="312" y="242" class="mut">depth, 0.41–4.74 m</text>
+
+  <!-- rays -->
+  <line x1="180" y1="310" x2="300" y2="125" stroke="#38bdf8" stroke-width="3"/>
+  <line x1="420" y1="310" x2="300" y2="125" stroke="#f472b6" stroke-width="3"/>
+
+  <!-- target point -->
+  <circle cx="300" cy="125" r="16" fill="#fbbf24" fill-opacity="0.2"/>
+  <circle cx="300" cy="125" r="7" fill="#fbbf24"/>
+  <text x="322" y="120" class="lab">P  (clicked in both photos)</text>
+
+  <!-- baseline -->
+  <line x1="188" y1="352" x2="412" y2="352" stroke="#94a3b8" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="300" y="372" text-anchor="middle" class="mut">baseline d (learned in calibration)</text>
+
+  <!-- cameras -->
+  <g>
+    <rect x="152" y="310" width="56" height="30" rx="6" fill="#0ea5e9"/>
+    <circle cx="180" cy="325" r="8" fill="#0f172a"/>
+    <circle cx="180" cy="325" r="4" fill="#38bdf8"/>
+    <text x="180" y="300" text-anchor="middle" class="lab" fill="#38bdf8" style="fill:#38bdf8">Left</text>
+  </g>
+  <g>
+    <rect x="392" y="310" width="56" height="30" rx="6" fill="#ec4899"/>
+    <circle cx="420" cy="325" r="8" fill="#0f172a"/>
+    <circle cx="420" cy="325" r="4" fill="#f472b6"/>
+    <text x="420" y="300" text-anchor="middle" class="lab" style="fill:#f472b6">Right</text>
+  </g>
+
+  <!-- result card -->
+  <rect x="540" y="104" width="384" height="236" rx="14" fill="#0f172a" stroke="#334155" stroke-width="1.5"/>
+  <text x="564" y="140" class="mut">REAL RIG, LEAVE-ONE-OUT (27 POINTS)</text>
+  <text x="564" y="212" font-size="64" font-weight="800" style="fill:#34d399">6.0 %</text>
+  <text x="564" y="240" font-size="17" font-weight="600">median relative error</text>
+  <line x1="564" y1="258" x2="900" y2="258" stroke="#334155"/>
+  <text x="564" y="288" class="mut">Median absolute error</text>
+  <text x="900" y="288" text-anchor="end" class="lab">15.8 cm</text>
+  <text x="564" y="314" class="mut">Held-out points within 5 %</text>
+  <text x="900" y="314" text-anchor="end" class="lab">11 / 27</text>
+</svg>

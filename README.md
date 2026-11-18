@@ -7,6 +7,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Code style: ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://github.com/astral-sh/ruff)
 
+![Two cameras triangulating a point: 6.0 % median relative error on held-out real points](docs/img/triangulation.svg)
+
 ![Learned focal maps of both cameras and leave-one-out predictions on the real rig](docs/img/hero.png)
 
 *Left and middle: the focal length each camera learned across the frame (cx / Γ, in px, with the 5×5 nodes marked), from 27 hand-labelled points. Right: depth predicted for each real point by a model that never saw it (leave-one-out), against the tape-measured distance.*
